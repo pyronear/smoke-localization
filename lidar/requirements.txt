@@ -1,0 +1,4 @@
+numpy
+open3d
+laspy[lazrs,laszip]
+pyproj
