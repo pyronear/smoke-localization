@@ -1,4 +1,4 @@
 **/.fuse_hidden*
-pointcloud/data/MNS/*.laz
-pointcloud/data/pyronear_cam_data/*
+lidar/data/MNS/*.laz
+lidar/data/pyronear_cam_data/*
 .token

@@ -1,5 +1,4 @@
 numpy
-pandas
 open3d
 laspy
 pyproj
