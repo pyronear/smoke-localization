@@ -21,9 +21,9 @@
 	],
 	"intrinsic" : 
 	{
-		"height" : 1031,
-		"intrinsic_matrix" : [ 400.0, 0.0, 0.0, 0.0, 400.0, 0.0, 470.0, 515.0, 1.0 ],
-		"width" : 941
+		"height" : 720,
+		"intrinsic_matrix" : [ 914.29, 0.0, 0.0, 0.0, 914.29, 0.0, 639.5, 359.5, 1.0 ],
+		"width" : 1280
 	},
 	"version_major" : 1,
 	"version_minor" : 0
