@@ -1,7 +1,11 @@
+cameratransform @ git+https://github.com/rgerum/cameratransform.git
+Geometry3D @ git+https://github.com/FS-CS/Geometry3D.git@polygon_nocheck_3points_plane
 geopandas
 ipympl
 jupyterlab
 matplotlib
+nptyping
 numpy
 pandas
-cameratransform @ git+https://github.com/rgerum/cameratransform.git
+pandera
+tqdm
