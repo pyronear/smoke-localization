@@ -97,6 +97,22 @@ def callbacks(parameters, view_point):
         ctr = vis.get_view_control()
         ctr.set_lookat(view_point)
         return False
+    
+    def save_depth(vis):
+        '''Save the current depth map and camera parameters
+        Args:
+            vis (o3d.visualization.Visualizer): visualizer
+        Returns:
+            bool: False
+        '''
+        datadir = './data/plots/'
+        ctr = vis.get_view_control()
+        param = ctr.convert_to_pinhole_camera_parameters()
+        o3d.io.write_pinhole_camera_parameters(datadir+'test_parameters.json', param)
+        depths = np.asarray(vis.capture_depth_float_buffer())
+        np.save(datadir+'test_depth.npy', depths)
+
+        return False
 
     key_to_callback = {}
     key_to_callback[gui.KeyName.RIGHT] = rotate_view_right
@@ -105,6 +121,7 @@ def callbacks(parameters, view_point):
     key_to_callback[ord("U")] = correct_up
     key_to_callback[ord("V")] = set_view
     key_to_callback[ord("L")] = look_at_view_point
+    key_to_callback[ord("D")] = save_depth
 
     return key_to_callback
 

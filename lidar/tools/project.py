@@ -2,7 +2,6 @@ import numpy as np
 from pyproj import Transformer
 import matplotlib.pyplot as plt
 
-# project a point from latitude longitude to Lambert 93 coordinates
 def to_lambert93(lat, lon, altitude):
     '''project a point from latitude longitude (ESPG:4326) to Lambert 93 coordinates (ESPG:2154)
 
@@ -16,6 +15,21 @@ def to_lambert93(lat, lon, altitude):
     '''
     projector = Transformer.from_crs("EPSG:4326", "EPSG:2154")
     point = np.array(projector.transform(lat,lon)+(altitude,))
+    return point
+
+def to_lat_lon(x, y, z):
+    '''project a point from Lambert 93 (ESPG:2154) to latitude longitude coordinates (ESPG:4326) 
+
+    Args:
+        x (float): x
+        y (float): y
+        z (float): altitude
+
+    Returns:
+        np.array: [lat,lon,z]
+    '''
+    projector = Transformer.from_crs("EPSG:2154", "EPSG:4326")
+    point = np.array(projector.transform(x,y)+(z,))
     return point
 
 def array_cartesian_to_spherical(points, view_point):
@@ -174,3 +188,22 @@ def skyline_to_cartesian(spherical, angles, skyline, view_point, max_z):
         skyline_points[phi] = np.add(cart_point, view_point)
     return skyline_points
 
+def unproject(u,v,w,param):
+    '''Get real world coordinates (x,y,z) from image coordinates (u,v,depth)
+
+    Args:
+        u (int): image horizontal coordinate
+        v (int): image vertical coordinates (pixel)
+        w (float): depth value at (u,v)
+        param (open3d.): camera parameters
+
+    Returns:
+        list (3): world coordinates [x,y,z]
+    '''
+    # project image coordinates to camera coordinates
+    ray = np.linalg.inv(param.intrinsic.intrinsic_matrix).dot([u,v,1])
+    # normalize and multiply by depth
+    ray *= w/np.linalg.norm(ray)
+    # project camera coordinates to world coordinates
+    x,y,z,_ = np.linalg.inv(param.extrinsic).dot(np.append(ray,1))
+    return [x,y,z]
