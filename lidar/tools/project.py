@@ -65,7 +65,7 @@ def array_cartesian_to_spherical(points, view_point):
             phi = np.arcsin(ydif/np.sqrt(rho2))
         else: #x<x0
             phi = -np.arcsin(ydif/np.sqrt(rho2))+np.pi
-        return [r, theta, phi]
+        return [r, theta, 2*np.pi-phi]
     spherical = np.apply_along_axis(cartesian_to_spherical, 1, np.asarray(points))
     return spherical
 

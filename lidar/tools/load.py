@@ -4,6 +4,7 @@ import laspy
 import os
 import glob
 import urllib.request
+import matplotlib.pyplot as plt
 
 def las_to_point(las):
     '''Convert a las object into an array of points x,y,z
@@ -152,3 +153,39 @@ def load_pcd(datadir, save=""):
         print("saved")
         o3d.io.write_point_cloud(datadir+save+".pcd", pc)
     return pc
+
+def load_skyline(filepath, fov, width, height, plot=False):
+    '''Load and prepare a skyline as numpy array
+
+    Args:
+        filepath (string): path to the .npy file to read
+        fov (float): field of view in degrees
+        width (int): width of the image from which is extracted the skyline, in pixels
+        height (int): height of the image, in pixels
+        plot (boolean, optional): if true, plot the skyline. Default to False
+
+    Returns:
+        np.array (fov,): skyline as a list of size fov
+    '''
+    # load npy
+    image_skyline = np.load(filepath).astype(float)
+    # remove useless dimension
+    image_skyline = image_skyline[:,0]
+    # invert y axis (comes from an image, where 0,0 is on top left corner)
+    image_skyline[:,1] = height-image_skyline[:,1]
+    # sort
+    image_skyline = image_skyline[image_skyline[:, 0].argsort()]
+
+    # downsample the image skyline to the fov width
+    indices = np.linspace(0, width, num=fov, dtype=int, endpoint=False)
+    reduced_image_skyline = np.interp(indices, image_skyline[:,0], image_skyline[:,1])
+    
+    # plot if requested
+    if plot:
+        plt.xlim(0, width)
+        plt.ylim(0, height)
+        plt.plot(indices, reduced_image_skyline, linewidth=3, color='sienna')
+        plt.title('Skyline from image')
+        plt.show()
+
+    return reduced_image_skyline

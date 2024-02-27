@@ -1,15 +1,19 @@
 import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
+import cv2
 
-def get_focal_length_px(f, width, height, diag):
+WIDTH = 1280
+HEIGHT = 720
+
+def get_focal_length_px(f, diag, width=WIDTH, height=HEIGHT):
     '''Compute focal lengths in pixels from camera sensor specifications
 
     Args:
         f (float): focal length in mm
-        width (int): image width in px
-        height (int): image height in px
         diag (float): sensor diagonal, for example 1/2.49
+        width (int, optional): image width in px
+        height (int, optional): image height in px
 
     Returns:
         (float, float): focal lengths for x and y, in pixels
@@ -21,6 +25,23 @@ def get_focal_length_px(f, width, height, diag):
     fx = f*width/sensorWidth
     fy = f*height/sensorHeight
     return fx, fy
+
+def visualize(objects, parameters, width=WIDTH, height=HEIGHT):
+    '''Create a window to visualize a point cloud given camera parameters
+
+    Args:
+        objects (list of open3d.geometry...): list of point cloud, or mesh to visualize
+        parameters (open3d.camera.PinholeCameraParameters): camera parameters
+        width (int, optional): window width. Defaults to WIDTH.
+        height (int, optional): window height. Defaults to HEIGHT.
+    '''
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(width=width, height=height)
+    for o in objects:
+        vis.add_geometry(o)
+    vis.get_view_control().convert_from_pinhole_camera_parameters(parameters, True)
+    vis.run()
+    vis.destroy_window()
 
 def callbacks(parameters, view_point):
     '''Set camera actions and return callbacks dict
@@ -85,6 +106,7 @@ def callbacks(parameters, view_point):
         '''
         ctr = vis.get_view_control()
         ctr.convert_from_pinhole_camera_parameters(parameters, True)
+        print('field of view:', ctr.get_field_of_view())
         return False
 
     def look_at_view_point(vis):
@@ -157,3 +179,43 @@ def save_skyline_with_terrain(pc, skyline_points, image_path):
     vis.capture_screen_image(image_path)
     print('Image saved at',image_path)
     vis.destroy_window()
+
+def get_extrinsic(azimuth, view_point):
+    '''Compute the camera extrinsic matrix (convert from camera coordinates to real world)
+
+    Args:
+        azimuth (int): angle in degrees
+        view_point (np.array (3,)): x,y,z viewpoint coordinates 
+
+    Returns:
+        np.array (4,4): extrinsic matrix (as defined by open3d)
+    '''
+    '''
+    First get the transformation matrix from real world to camera 
+    (usually called extrinsic matrix, but for open3d it's its inverse)
+    | R(3,3) t(1,3) |
+    | 0(3,1)    1   |
+    with R the rotation matrix, 
+        can be expressed with camera axis (front, right, up):
+        | right.T  |
+        | -up.T    |
+        | -front.T |
+        for example, the default R is:
+        | 1  0  0 |
+        | 0  0 -1 |
+        | 0 -1  0 | 
+    and t, the translation vector [tx, ty, tz].T, in our case the viewpoint coordinates
+    '''
+    # get R directly from a rotation vector
+    # the only rotation is around the up axis, the value is the azimuth (in radians)
+    rvec = np.array([0, 0, 1]) * azimuth * np.pi/180
+    R, _ = cv2.Rodrigues(rvec)
+    # some transformations to adapt to the open3d conventions
+    R[1,:] *=-1
+    R[2,:] *=-1
+    R[:,[1,2]] = R[:,[2,1]] # invert Y and Z columns
+    # append R columns with 0 and t with 1, and stack them to get the 4*4 extrinsic matrix
+    ext = np.column_stack((np.row_stack((R, [0,0,0])),np.append(view_point,[1])))
+    # invert to get open3d extrinsic matrix
+    ext = np.linalg.inv(ext)
+    return ext

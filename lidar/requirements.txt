@@ -3,3 +3,6 @@ open3d
 laspy[lazrs,laszip]
 pyproj
 matplotlib
+torch
+timm
+cv2
