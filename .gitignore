@@ -2,3 +2,4 @@
 lidar/data/MNS/*.laz
 lidar/data/pyronear_cam_data/*
 .token
+.ipynb_checkpoints
