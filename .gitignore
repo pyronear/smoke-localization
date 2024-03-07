@@ -1,0 +1,4 @@
+.venv
+pyronear_cam_data
+*.tiff
+*.png
