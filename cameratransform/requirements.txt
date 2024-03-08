@@ -7,4 +7,5 @@ nptyping
 numpy
 pandas
 pandera
-pyvista[all, trame]
+pyproj
+pyvista[all, trame, trimesh, rtree, pyembree]

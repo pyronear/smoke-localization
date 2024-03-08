@@ -6,14 +6,14 @@ from pandera.typing import Series
 from pathlib import Path
 
 
-def generate_dem_meshgrid(header: Series[float], alts: Coord1DFloatMesh, sample_step: int) -> Coord3DFloatMesh:
+def generate_dem_meshgrid(header: Series[float], alts: Coord1DFloatGrid, sample_step: int) -> Coord3DFloatGrid:
     """Generates the 3D-coordinate meshgrid corresponding to a .asc file.
 
     Parameters
     ----------
     header : Series[float]
         The file's header information.
-    alts : Coord1DFloatMesh
+    alts : Coord1DFloatGrid
         The file's altimetry table.
     sample_step : int
         The sampling step, used to subsample the mapping before creating the
@@ -21,7 +21,7 @@ def generate_dem_meshgrid(header: Series[float], alts: Coord1DFloatMesh, sample_
 
     Returns
     -------
-    grid : Coord3DFloatMesh
+    grid : Coord3DFloatGrid
         The resulting meshgrid.
     """
 
@@ -32,7 +32,7 @@ def generate_dem_meshgrid(header: Series[float], alts: Coord1DFloatMesh, sample_
     return grid
 
 
-def generate_header_and_alts(tile_file: Path | str) -> (Series[float], Coord1DFloatMesh):
+def generate_header_and_alts(tile_file: Path | str) -> (Series[float], Coord1DFloatGrid):
     """Reads the header and altimetry table from an IGN tile file (.asc).
 
     Parameters
@@ -45,7 +45,7 @@ def generate_header_and_alts(tile_file: Path | str) -> (Series[float], Coord1DFl
     header : Series[float]
         The file's header containing the following values: ncols, nrows,
         xllcorner, yllcorner, cellsize, NODATA_value.
-    alts : Coord1DFloatMesh
+    alts : Coord1DFloatGrid
         The altimetry table for the tile.
     """
 
