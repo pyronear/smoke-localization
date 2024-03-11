@@ -3,3 +3,5 @@ lidar/data/MNS/*.laz
 lidar/data/pyronear_cam_data/*
 **/__pycache__/*
 .token
+.venv
+*.tiff
