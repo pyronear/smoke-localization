@@ -3,6 +3,10 @@ open3d
 laspy[lazrs,laszip]
 pyproj
 matplotlib
-torch
 timm
 cv2
+elevation
+gdal
+rasterio
+transformers
+torch --index-url https://download.pytorch.org/whl/cpu

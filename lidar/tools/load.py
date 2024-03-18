@@ -1,10 +1,16 @@
 import numpy as np
+import pandas as pd
 import open3d as o3d
 import laspy
 import os
 import glob
 import urllib.request
 import matplotlib.pyplot as plt
+import math
+from pathlib import Path
+import elevation as eio
+from osgeo import gdal
+from pyproj import Transformer
 
 def las_to_point(las):
     '''Convert a las object into an array of points x,y,z
@@ -153,6 +159,56 @@ def load_pcd(datadir, save=""):
         print("saved")
         o3d.io.write_point_cloud(datadir+save+".pcd", pc)
     return pc
+
+def bounds_from_distance(lat, lon, distance):
+    '''Compute bounds around lat loc from given distance
+
+    Args:
+        lat (float): latitude
+        lon (float): longitude
+        distance (float): distance in km
+
+    Returns:
+        list : [x1,y1,x2,y2], boundaries around lat lon
+    '''
+    dlat = (distance/2) / 111.11
+    dlon = dlat / math.cos(math.radians(lat))
+    return [lon - dlon, lat - dlat, lon + dlon, lat + dlat]
+
+def download_from_eio(datapath, name, lat, lon, distance=50):
+    '''Download elevation data and save it as .xyz file
+
+    Args:
+        datapath (str): path to the data folder
+        name (str): name to identify files
+        lat (float): latitude of viewpoint
+        lon (float): longitude of viewpoint
+        distance (int, optional): ditance to load around viewpoint. Defaults to 50.
+
+    Returns:
+        _type_: _description_
+    '''
+    # get bounds
+    bounds = bounds_from_distance(lat, lon, distance)
+    tiff_file = Path.cwd().as_posix()+datapath.replace('.', '')+name+'.tiff'
+    # download elevation data
+    eio.clip(bounds=bounds, output=tiff_file, product='SRTM3') # take some time proportional to distance
+    # open it and translate it to xyz
+    xyz_file = datapath+name+'.xyz'
+    tiff_data = gdal.Open(tiff_file)
+    xyz = gdal.Translate(xyz_file, tiff_data)
+    xyz_df = pd.read_csv(xyz_file, sep=' ', names=['x', 'y', 'z'])
+    # delete tiff file
+    if os.path.exists(tiff_file):
+        os.remove(tiff_file)
+    # project coordinates to lambert 93
+    projector = Transformer.from_crs("EPSG:4326", "EPSG:2154")
+    def project_row(row):
+        return np.array(projector.transform(row['y'], row['x'])+(row['z'],))
+    xyz_df = xyz_df.apply(project_row, axis=1, result_type='broadcast') # take some time
+    # save the processed xyz data
+    xyz_df.to_csv(xyz_file, sep=' ', header=False, index=False)
+    print('File', xyz_file, 'ready.')
 
 def load_skyline(filepath, fov, width, height, plot=False):
     '''Load and prepare a skyline as numpy array

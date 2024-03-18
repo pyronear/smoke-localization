@@ -121,12 +121,13 @@ def delete_max(array):
     new_array = np.delete(array, imax)
     return m, new_array
 
-def get_skyline(angles, threshold=1e-4):
+def get_skyline(angles, threshold=1e-1, savepath=False):
     '''Extract skyline from spherical coordinates points
 
     Args:
         angles (np.array (3,n)): array of spherical coordinates angles in degree [[theta,phi],...]
         threshold (float, optional): outliers distants by more than this value are removed. Defaults to 1e-4.
+        savepath (bool or str, optional): whether or not to save the skyline and at which path. defaults to False. 
 
     Returns:
         np.array (360,): skyline, i.e. max elevation angle for each azimuth angle
@@ -146,6 +147,10 @@ def get_skyline(angles, threshold=1e-4):
             thetas = t
             m, t = delete_max(thetas)
         skyline[i%360] = np.max(thetas)
+
+    # save the skyline if requested
+    if savepath:
+        np.save(savepath+'.npy', skyline)
     return skyline
 
 def plot_skyline(skyline, title):
@@ -181,7 +186,7 @@ def skyline_to_cartesian(spherical, angles, skyline, view_point, max_z):
     # for each angle pair
     for phi, theta in enumerate(skyline):
         # get the index corresponding to that angle combination (spherical and angles have the same order)
-        i = np.argwhere((angles[:,0]==theta) & ((angles[:,1]+90)%360==phi))[0][0]
+        i = np.argwhere((angles[:,0]==theta) & ((angles[:,1]-90)%360==phi))[0][0]
         # convert the point to cartesian coordinates
         cart_point = spherical_to_cartesian(spherical[i], replaceZ=max_z)
         # translate cartesian conversion to viewpoint

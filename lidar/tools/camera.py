@@ -219,3 +219,18 @@ def get_extrinsic(azimuth, view_point):
     # invert to get open3d extrinsic matrix
     ext = np.linalg.inv(ext)
     return ext
+
+def get_depths(pc, parameters, savepath=False, name='test', height=HEIGHT, width=WIDTH):
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(width=width, height=height, visible=False)
+    vis.add_geometry(pc)
+    ctr = vis.get_view_control()
+    ctr.convert_from_pinhole_camera_parameters(parameters, True)
+    depths = np.asarray(vis.capture_depth_float_buffer(do_render=True))
+    # if savepath:
+    #     o3d.io.write_pinhole_camera_parameters(savepath+name+'.json', parameters)
+    #     np.save(savepath+name+'_depth.npy', depths)
+    vis.poll_events()
+    vis.update_renderer()
+    vis.destroy_window()
+    return depths
