@@ -1,6 +1,6 @@
 import pandera as pa
 
-from nptyping import assert_isinstance, Int, NDArray, Shape, Float
+from nptyping import Int, Float, NDArray, Shape
 from pandera.typing import DataFrame, Index, Series
 
 Coord1DFloatGrid = NDArray[Shape["* n_rows, * n_cols, [z]"], Float]

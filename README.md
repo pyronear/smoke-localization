@@ -28,10 +28,14 @@ coordonnées IGN sur le champ de vue d'une caméra (ici brison_4, cf. les [donn�
 
 La branche contient de plus un fichier `df_annotations.pdk` qui contient les coordonnées de GCPs relevés manuellement afin de pouvoir comparer les projections faites par le modèle de caméra avec une vérité terrain (approximative).
 
-### Exécution du notebook test
+Elle contient également un notebook `cameratransform/multiray_cast.ipynb` qui teste la projection de multiple points en coordonnées pixels sur le MNT environnant à l'aide du package `georefcam`. Ce dernier sert à modéliser une
+caméra géolocalisée et orientée, permettant le géoréférencement de points d'intérêt de l'image.
+
+### Exécution des notebook test
 
 Les étapes nécessaires à l'exécution du notebook sont donc les suivantes :
-- Installation des packages nécessaires : ` pip install -r cameratransform/requirements.txt`
+- Installation des dépendances nécessaires : `pip install -r cameratransform/requirements.txt`
+- Installation du package `georefcam` : `pip install cameratransform/`
 - Téléchargement des [données et galeries d'images de caméras](https://drive.google.com/file/d/1GsJIjNyjnZjV2tzMuB0xTZ2hwz-lpRjB/view?usp=sharing)
 - Téléchargement et extraction des [données IGN utilisées](https://wxs.ign.fr/aqd29otkz2hofiee5pb0fygn/telechargement/prepackage/BDALTI-25M_PACK_FXX_2023-02-01$BDALTIV2_2-0_25M_ASC_LAMB93-IGN69_D007_2022-12-16/file/BDALTIV2_2-0_25M_ASC_LAMB93-IGN69_D007_2022-12-16.7z)
 - Édition de la cellule du notebook qui indique les chemins de dossiers contenant les données
