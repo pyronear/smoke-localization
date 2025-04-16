@@ -5,3 +5,5 @@
 .venv
 *.tiff
 .ipynb_checkpoints
+*.tif
+*.jpg
