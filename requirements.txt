@@ -17,3 +17,5 @@ rioxarray
 torch
 transformers
 trimesh
+streamlit==1.40.0
+streamlit-drawable-canvas
