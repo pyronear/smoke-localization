@@ -20,23 +20,54 @@ from pyproj import Transformer
 from typing import Literal
 
 
-def project_points_to_crs(points: Coord3DFloatPoints, from_crs: str, to_crs: str) -> Coord3DFloatPoints:
-    transformer = Transformer.from_crs(from_crs, to_crs)
-    if points.ndim == 2:
-        xx, yy, zz = [points[:, i] for i in range(3)]
-    else:
-        xx, yy, zz = points
+from pyproj import CRS, Transformer
+import numpy as np
+
+
+def project_points_to_crs(points: np.ndarray, from_crs: str | CRS, to_crs: str | CRS) -> np.ndarray:
+    # Convert to string for comparison
+    if str(from_crs).lower() == str(to_crs).lower():
+        return points  # ✅ Ne rien faire si les CRS sont identiques
+    
+    print("FROM CRS:", from_crs)
+    print("TO CRS:", to_crs)
+    print("Skip reprojection?", str(from_crs).lower() == str(to_crs).lower())
+
+    transformer = Transformer.from_crs(from_crs, to_crs, always_xy=True)
+    xx, yy, zz = points[:, 0], points[:, 1], points[:, 2]
     pr_xx, pr_yy, pr_zz = transformer.transform(xx, yy, zz)
-    return np.vstack((pr_xx, pr_yy, pr_zz)).T
+    result = np.stack((pr_xx, pr_yy, pr_zz), axis=1)
+
+    if not np.all(np.isfinite(result)):
+        invalid = np.where(~np.isfinite(result))
+        print("[ERROR] Invalid input to transform:")
+        print(points[invalid[0]])
+        raise ValueError(f"[Reprojection Error] Non-finite coords at indices {invalid}")
+
+    return result
 
 
-def get_direction_vector(azimuth: float, pitch: float, length: float = 1):
-    return np.array([
-        length * np.sin(np.radians(azimuth)),
-        length * np.cos(np.radians(azimuth)),
-        -length * np.sin(np.radians(pitch))
-    ])
 
+
+
+
+
+
+def get_direction_vector(azimuth: float, pitch: float, length: float = 1.0):
+    if not np.isfinite(azimuth) or not np.isfinite(pitch):
+        raise ValueError(f"Invalid azimuth or pitch: {azimuth}, {pitch}")
+
+    az_rad = np.radians(azimuth)
+    pitch_rad = np.radians(pitch)
+
+    dx = length * np.cos(pitch_rad) * np.sin(az_rad)
+    dy = length * np.cos(pitch_rad) * np.cos(az_rad)
+    dz = length * np.sin(pitch_rad)
+
+    vec = np.array([dx, dy, dz])
+    if not np.all(np.isfinite(vec)):
+        raise ValueError(f"Invalid direction vector: {vec}")
+    return vec
 
 def timeout_handler(signum, frame):
     raise TimeoutError
@@ -60,53 +91,3 @@ class GeoRefCam:
         if check_crs and self.camera_model.crs != self.dem.crs:
             rays = self.project_rays_from_cam_to_dem_crs(rays)
         return self.dem.cast_rays_seq(rays)
-
-    # def evaluate_ypr_correction(
-    #     self,
-    #     refcam_img_path: Path | str,
-    #     model: str = "LiheYoung/depth-anything-small-hf",
-    #     debug: bool = False,
-    # ) -> np.ndarray:
-
-    #     pipe = pipeline(task="depth-estimation", model=model)
-    #     refcam_img = Image.open(refcam_img_path)
-    #     img_depth = np.asarray(pipe(refcam_img)["depth"])
-    #     img_depth = np.where(img_depth == 255, np.nan, img_depth)
-
-    #     cam_dirvec = get_direction_vector(self.camera_model.yaw_deg, self.camera_model.pitch_deg)
-    #     cam_loc = (
-    #         self.project_points_from_cam_to_dem_crs(np.array([self.camera_model.cam_loc[:3]]))[0]
-    #         if self.camera_model.cam_loc[3] != self.dem.crs else self.camera_model.cam_loc[:3]
-    #     )
-
-    #     camera = pv.Camera()
-    #     camera.clipping_range = (30, 1e5)
-    #     camera.position = cam_loc
-    #     camera.focal_point = cam_loc + cam_dirvec
-    #     camera.view_angle = self.camera_model.view_y_deg
-    #     camera.up = (0, 0, 1)
-
-    #     plot_pv_meshgrid = pv.StructuredGrid(*[self.dem.pcd[:, :, i] for i in range(3)])
-    #     plot_pv_meshgrid["alt"] = self.dem.pcd[:, :, 2].ravel(order="F")
-
-    #     plotter = pv.Plotter(window_size=refcam_img.size)
-    #     plotter.camera = camera
-    #     plotter.add_mesh(plot_pv_meshgrid, lighting=False)
-    #     plotter.remove_scalar_bar()
-    #     plotter.screenshot()
-
-    #     dem_depth = -1 * plotter.get_image_depth()
-    #     dem_depth = np.where(dem_depth <= 0, np.nan, dem_depth)
-
-    #     if debug:
-    #         plt.figure(figsize=(12, 5))
-    #         plt.subplot(1, 2, 1)
-    #         plt.title("Predicted depth")
-    #         plt.imshow(img_depth, cmap='gray')
-    #         plt.subplot(1, 2, 2)
-    #         plt.title("DEM-rendered depth")
-    #         plt.imshow(dem_depth, cmap='gray')
-    #         plt.tight_layout()
-    #         plt.show()
-
-    #     return dem_depth

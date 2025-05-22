@@ -6,7 +6,7 @@ import numpy as np
 import rioxarray
 from rasterio.enums import Resampling
 
-def compute_dem_bbox_from_point(lat, lon, buffer_km=50):
+def compute_dem_bbox_from_point(lat, lon, buffer_km=100):
     point_gdf = gpd.GeoDataFrame(geometry=[Point(lon, lat)], crs="EPSG:4326")
     point_proj = point_gdf.to_crs(epsg=3857)
     x, y = point_proj.geometry[0].x, point_proj.geometry[0].y
