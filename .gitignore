@@ -7,3 +7,5 @@
 .ipynb_checkpoints
 *.tif
 *.jpg
+site_data/*
+**.DS_Store**
