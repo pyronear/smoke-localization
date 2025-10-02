@@ -1,0 +1,9 @@
+{
+  "192_168_1_11_im_5.jpg": {
+    "ref_click": {
+      "x": 1110.1
+    },
+    "ref_azimuth": 8,
+    "computed_center_azimuth": 11.6
+  }
+}

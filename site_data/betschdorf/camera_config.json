@@ -1,0 +1,14 @@
+{
+  "lat": 48.8974722 ,
+  "lon": 7.9106944,
+  "name": "betschdorf",
+  "tilt": -4,
+  "roll": 0,
+  "elevation": 147,
+  "fov_x": 54,
+  "fov_y": 44,
+  "img_size": [
+    1280,
+    720
+  ]
+}

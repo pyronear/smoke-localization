@@ -1,0 +1,16 @@
+{
+  "192_168_1_12_im_1.jpg": {
+    "ref_click": {
+      "x": 1143.7
+    },
+    "ref_azimuth": 62,
+    "computed_center_azimuth": 64.89
+  },
+  "192_168_1_12_im_3.jpg": {
+    "ref_click": {
+      "x": 1125.9
+    },
+    "ref_azimuth": 156.7,
+    "computed_center_azimuth": 159.96
+  }
+}
