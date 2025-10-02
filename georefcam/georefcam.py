@@ -1,4 +1,5 @@
 import os
+
 os.environ["PYVISTA_OFF_SCREEN"] = "true"
 os.environ["PYVISTA_USE_COCOA"] = "false"  # 👈 disable macOS GUI backend
 
@@ -10,12 +11,18 @@ import signal
 
 from .camera_model import AbstractCameraModel
 from .dem import RasterioDEM
-from .data_types import Coord3DFloatPoints, DfRayInstance, ImageArrayRGB, RayCoord3DFloatPoints
+from .data_types import (
+    Coord3DFloatPoints,
+    DfRayInstance,
+    ImageArrayRGB,
+    RayCoord3DFloatPoints,
+)
 from .logger import logger
 from nptyping import assert_isinstance, Int, NDArray, Shape
 from pathlib import Path
 from PIL import Image
 from pyproj import Transformer
+
 # from transformers import pipeline
 from typing import Literal
 
@@ -24,11 +31,13 @@ from pyproj import CRS, Transformer
 import numpy as np
 
 
-def project_points_to_crs(points: np.ndarray, from_crs: str | CRS, to_crs: str | CRS) -> np.ndarray:
+def project_points_to_crs(
+    points: np.ndarray, from_crs: str | CRS, to_crs: str | CRS
+) -> np.ndarray:
     # Convert to string for comparison
     if str(from_crs).lower() == str(to_crs).lower():
         return points  # ✅ Ne rien faire si les CRS sont identiques
-    
+
     print("FROM CRS:", from_crs)
     print("TO CRS:", to_crs)
     print("Skip reprojection?", str(from_crs).lower() == str(to_crs).lower())
@@ -47,12 +56,6 @@ def project_points_to_crs(points: np.ndarray, from_crs: str | CRS, to_crs: str |
     return result
 
 
-
-
-
-
-
-
 def get_direction_vector(azimuth: float, pitch: float, length: float = 1.0):
     if not np.isfinite(azimuth) or not np.isfinite(pitch):
         raise ValueError(f"Invalid azimuth or pitch: {azimuth}, {pitch}")
@@ -69,6 +72,7 @@ def get_direction_vector(azimuth: float, pitch: float, length: float = 1.0):
         raise ValueError(f"Invalid direction vector: {vec}")
     return vec
 
+
 def timeout_handler(signum, frame):
     raise TimeoutError
 
@@ -78,15 +82,23 @@ class GeoRefCam:
         self.camera_model = camera_model
         self.dem = dem
 
-    def project_points_from_cam_to_dem_crs(self, points: Coord3DFloatPoints) -> Coord3DFloatPoints:
+    def project_points_from_cam_to_dem_crs(
+        self, points: Coord3DFloatPoints
+    ) -> Coord3DFloatPoints:
         return project_points_to_crs(points, self.camera_model.crs, self.dem.crs)
 
-    def project_rays_from_cam_to_dem_crs(self, rays: RayCoord3DFloatPoints) -> RayCoord3DFloatPoints:
+    def project_rays_from_cam_to_dem_crs(
+        self, rays: RayCoord3DFloatPoints
+    ) -> RayCoord3DFloatPoints:
         origins, destinations = rays[:, :, 0], rays[:, :, 1]
-        proj_points = self.project_points_from_cam_to_dem_crs(np.vstack((origins, destinations)))
-        return np.dstack((proj_points[:len(origins)], proj_points[len(origins):]))
+        proj_points = self.project_points_from_cam_to_dem_crs(
+            np.vstack((origins, destinations))
+        )
+        return np.dstack((proj_points[: len(origins)], proj_points[len(origins) :]))
 
-    def cast_rays(self, rays: RayCoord3DFloatPoints, check_crs: bool = True) -> Coord3DFloatPoints:
+    def cast_rays(
+        self, rays: RayCoord3DFloatPoints, check_crs: bool = True
+    ) -> Coord3DFloatPoints:
         assert_isinstance(rays, RayCoord3DFloatPoints)
         if check_crs and self.camera_model.crs != self.dem.crs:
             rays = self.project_rays_from_cam_to_dem_crs(rays)

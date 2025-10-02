@@ -9,6 +9,7 @@ from pyproj import CRS, Transformer
 from rasterio.crs import CRS as rioCRS
 from pyproj import Transformer
 
+
 class AbstractCameraModel(metaclass=ABCMeta):
     """An abstract class representing the common API shared by camera models.
 
@@ -22,14 +23,16 @@ class AbstractCameraModel(metaclass=ABCMeta):
         The CRS of the system.
     cam_loc : tuple[float, float, float, CRS | rioCRS]
         The location of the camera in a given CRS to be used by third parties.
-        Its values respectively are [lat, lon, alt_m, CRS].
+        Its values respectively are [lat, lon, elevation, CRS].
     """
 
     crs: str | CRS | rioCRS = abstract_attribute()
     cam_loc: tuple[float, float, float, str | CRS | rioCRS] = abstract_attribute()
 
     @abstractmethod
-    def project_pixel_points_to_world_rays(self, pixels: Coord2DIntPoints) -> RayCoord3DFloatPoints:
+    def project_pixel_points_to_world_rays(
+        self, pixels: Coord2DIntPoints
+    ) -> RayCoord3DFloatPoints:
         """Projects a collection of pixel coordinates to real-world rays.
 
         Each projected ray is represented by two points.
@@ -71,7 +74,7 @@ class SimpleCameraModel(AbstractCameraModel):
         The latitude of the camera location.
     lon : float
         The longitude of the camera location.
-    alt_m : float
+    elevation : float
         The altitude of the camera location.
     crs : str | CRS | rioCRS
         The CRS of the system.
@@ -94,7 +97,7 @@ class SimpleCameraModel(AbstractCameraModel):
         The latitude of the camera location.
     lon : float
         The longitude of the camera location.
-    alt_m : float
+    elevation : float
         The altitude of the camera location.
     crs : CRS | rioCRS
         The CRS of the system.
@@ -108,27 +111,31 @@ class SimpleCameraModel(AbstractCameraModel):
         The longitude of the camera location projected into the local CRS.
     cam_loc : tuple[float, float, float, CRS | rioCRS]
         The location of the camera in a given CRS to be used by third parties.
-        Its values respectively are [lat, lon, alt_m, CRS].
+        Its values respectively are [lat, lon, elevation, CRS].
 
     """
 
     def __init__(
-            self,
-            image_res: tuple[int, int],
-            view_x_deg: float,
-            view_y_deg: float,
-            yaw_deg: float,
-            pitch_deg: float,
-            roll_deg: float,
-            lat: float,
-            lon: float,
-            alt_m: float,
-            crs: str | CRS | rioCRS,
+        self,
+        image_res: tuple[int, int],
+        view_x_deg: float,
+        view_y_deg: float,
+        yaw_deg: float,
+        pitch_deg: float,
+        roll_deg: float,
+        lat: float,
+        lon: float,
+        elevation: float,
+        crs: str | CRS | rioCRS,
     ) -> None:
 
-        self.image_res, self.view_x_deg, self.view_y_deg = image_res, view_x_deg, view_y_deg
+        self.image_res, self.view_x_deg, self.view_y_deg = (
+            image_res,
+            view_x_deg,
+            view_y_deg,
+        )
         self.yaw_deg, self.pitch_deg, self.roll_deg = yaw_deg, pitch_deg, roll_deg
-        self.lat, self.lon, self.alt_m = lat, lon, alt_m
+        self.lat, self.lon, self.elevation = lat, lon, elevation
 
         if isinstance(crs, str):
             self.crs = CRS(crs)
@@ -139,10 +146,14 @@ class SimpleCameraModel(AbstractCameraModel):
 
         self.tf_wgs84_to_local = Transformer.from_crs("wgs84", self.crs)
         self.tf_local_to_wgs84 = Transformer.from_crs(self.crs, "wgs84")
-        self.proj_lat, self.proj_lon = self.tf_wgs84_to_local.transform(self.lat, self.lon)
-        self.cam_loc = (self.lat, self.lon, self.alt_m, self.crs)
+        self.proj_lat, self.proj_lon = self.tf_wgs84_to_local.transform(
+            self.lat, self.lon
+        )
+        self.cam_loc = (self.lat, self.lon, self.elevation, self.crs)
 
-    def project_pixel_points_to_world_rays(self, pixels: Coord2DIntPoints) -> RayCoord3DFloatPoints:
+    def project_pixel_points_to_world_rays(
+        self, pixels: Coord2DIntPoints
+    ) -> RayCoord3DFloatPoints:
         """Projects a collection of pixel coordinates to real-world rays.
 
         Each projected ray is represented by two points:
@@ -169,84 +180,121 @@ class SimpleCameraModel(AbstractCameraModel):
         point_pitch = self.pitch_deg + self.view_y_deg * (y - h / 2) / h
 
         ray_length_m = 100e3
-        ray_endpoint_world = np.vstack((
-            ray_length_m * np.sin(np.radians(point_yaw)),
-            ray_length_m * np.cos(np.radians(point_yaw)),
-            self.alt_m - ray_length_m * np.sin(np.radians(point_pitch))
-        )).T
+        ray_endpoint_world = np.vstack(
+            (
+                ray_length_m * np.sin(np.radians(point_yaw)),
+                ray_length_m * np.cos(np.radians(point_yaw)),
+                self.elevation - ray_length_m * np.sin(np.radians(point_pitch)),
+            )
+        ).T
 
-        campoint_world = np.array([self.proj_lat, self.proj_lon, self.alt_m])
-        campoint_world_broadcasted = np.broadcast_to(campoint_world, ray_endpoint_world.shape)
+        campoint_world = np.array([self.proj_lat, self.proj_lon, self.elevation])
+        campoint_world_broadcasted = np.broadcast_to(
+            campoint_world, ray_endpoint_world.shape
+        )
 
         proj_rays = np.dstack((campoint_world_broadcasted, ray_endpoint_world))
 
         return proj_rays
-class CTCameraModel(AbstractCameraModel):
-    def __init__(
-            self,
-            image_res: tuple[int, int],
-            view_x_deg: float,
-            view_y_deg: float,
-            yaw_deg: float,
-            pitch_deg: float,
-            roll_deg: float,
-            lat: float,
-            lon: float,
-            alt_m: float,
-            crs: str | CRS | rioCRS = "EPSG:2154",
-    ) -> None:
 
+
+class CTCameraModel(AbstractCameraModel):
+    """
+    Geolocated oriented camera model using cameratransform, with clear naming:
+
+    Parameters
+    ----------
+    image_res : tuple[int, int]
+        (width, height) of the image in pixels
+    fov_x_deg : float
+        horizontal field of view in degrees
+    fov_y_deg : float
+        vertical field of view in degrees
+    azimuth_deg : float
+        compass bearing of camera centre ray
+    tilt_deg : float
+        tilt angle (degrees above horizontal)
+    roll_deg : float
+        roll angle (degrees)
+    lat : float
+        latitude of camera in WGS84
+    lon : float
+        longitude of camera in WGS84
+    elevation : float
+        height above sea level in meters
+    crs : str | CRS
+        target projected CRS (e.g. "EPSG:2154")
+    """
+
+    def __init__(
+        self,
+        image_res: tuple[int, int],
+        fov_x_deg: float,
+        fov_y_deg: float,
+        azimuth_deg: float,
+        tilt_deg: float,
+        roll_deg: float,
+        lat: float,
+        lon: float,
+        elevation: float,
+        crs: str | CRS = "EPSG:2154",
+    ) -> None:
         self.image_res = image_res
-        self.view_x_deg = view_x_deg
-        self.view_y_deg = view_y_deg
-        self.yaw_deg = yaw_deg
-        self.pitch_deg = pitch_deg
+        self.fov_x_deg = fov_x_deg
+        self.fov_y_deg = fov_y_deg
+        self.azimuth_deg = azimuth_deg
+        self.tilt_deg = tilt_deg
         self.roll_deg = roll_deg
         self.lat = lat
         self.lon = lon
-        self.alt_m = alt_m
+        self.elevation = elevation
 
-        if isinstance(crs, str):
-            self.crs = CRS.from_user_input(crs)
-        else:
-            self.crs = crs
-
-        # Set up transformers
+        # parse CRS
+        self.crs = CRS.from_user_input(crs) if isinstance(crs, str) else crs
         self.is_projected = self.crs.to_epsg() != 4326
-        if self.is_projected:
-            self.tf_wgs84_to_local = Transformer.from_crs("EPSG:4326", self.crs, always_xy=True)
-            self.tf_local_to_wgs84 = Transformer.from_crs(self.crs, "EPSG:4326", always_xy=True)
-            x, y = self.tf_wgs84_to_local.transform(self.lon, self.lat)
-            self.cam_loc = (x, y, self.alt_m, self.crs)
-        else:
-            self.cam_loc = (self.lat, self.lon, self.alt_m, self.crs)
 
-        # Initialize cam model in GPS coordinates
-        self.cam_model = ct.Camera(
-            ct.RectilinearProjection(image=image_res, view_x_deg=view_x_deg, view_y_deg=view_y_deg),
-            ct.SpatialOrientationYawPitchRoll(
-                elevation_m=alt_m,
-                pitch_deg=pitch_deg,
-                roll_deg=roll_deg,
-                yaw_deg=yaw_deg,
+        # build transformers and camera location in local CRS
+        if self.is_projected:
+            self.tf_wgs84_to_local = Transformer.from_crs(
+                "EPSG:4326", self.crs, always_xy=True
             )
+            self.tf_local_to_wgs84 = Transformer.from_crs(
+                self.crs, "EPSG:4326", always_xy=True
+            )
+            x, y = self.tf_wgs84_to_local.transform(self.lon, self.lat)
+            self.cam_loc = (x, y, self.elevation, self.crs)
+        else:
+            self.cam_loc = (self.lat, self.lon, self.elevation, self.crs)
+
+        self.cam_model = ct.Camera(
+            ct.RectilinearProjection(
+                image=image_res,
+                view_x_deg=fov_x_deg,
+                view_y_deg=fov_y_deg,
+            ),
+            ct.SpatialOrientationYawPitchRoll(
+                elevation_m=self.elevation,
+                yaw_deg=azimuth_deg,
+                pitch_deg=self.tilt_deg,
+                roll_deg=self.roll_deg,
+            ),
         )
-        self.cam_model.setGPSpos(lat=lat, lon=lon)
+        self.cam_model.setGPSpos(lat=self.lat, lon=self.lon)
 
-    def project_pixel_points_to_world_rays(self, pixels: Coord2DIntPoints) -> RayCoord3DFloatPoints:
-        # Step 1: Target points in WGS84
-        targets_wgs = self.cam_model.gpsFromImage(pixels)  # shape (N, 3)
-
-        # Step 2: Project targets if necessary
+    def project_pixel_points_to_world_rays(
+        self,
+        pixels: Coord2DIntPoints,
+    ) -> RayCoord3DFloatPoints:
+        # project image pixels to world rays (source, target) pairs
+        targets_wgs = self.cam_model.gpsFromImage(pixels)
         if self.is_projected:
-            lon, lat, alt = targets_wgs[:, 1], targets_wgs[:, 0], targets_wgs[:, 2]
-            x, y, z = self.tf_wgs84_to_local.transform(lon, lat, alt)
+            lon_, lat_, alt_ = targets_wgs[:, 1], targets_wgs[:, 0], targets_wgs[:, 2]
+            x, y, z = self.tf_wgs84_to_local.transform(lon_, lat_, alt_)
             targets = np.stack([x, y, z], axis=1)
             origins = np.array(self.cam_loc[:3])
         else:
             targets = targets_wgs
-            origins = np.array([self.lat, self.lon, self.alt_m])
+            origins = np.array([self.lat, self.lon, self.elevation])
 
-        # Step 3: Broadcast and return rays
-        origins = np.broadcast_to(origins, targets.shape)
-        return np.dstack((origins, targets))
+        origins_b = np.broadcast_to(origins, targets.shape)
+        return np.dstack((origins_b, targets))

@@ -1,0 +1,12 @@
+{
+    "pipeline": [
+      "selected_lidar_nemours/*.laz",
+      {
+        "type": "writers.gdal",
+        "filename": "dsm_nemours_min.tif",
+        "resolution": 1.0,
+        "output_type": "min"
+      }
+    ]
+  }
+  

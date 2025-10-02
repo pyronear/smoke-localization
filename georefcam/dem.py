@@ -6,6 +6,7 @@ import pyvista as pv
 import rasterio
 from pyproj import CRS
 
+
 class RasterioDEM:
     def __init__(self, filepath, crs=None):
         self.filepath = filepath
@@ -32,17 +33,17 @@ class RasterioDEM:
 
         self.pcd = np.stack([xs, ys, zs], axis=-1)  # (H, W, 3)
 
-    def build_mesh(self, method='trimesh'):
+    def build_mesh(self, method="trimesh"):
         if self.pcd is None:
             raise ValueError("Call build_pcd() first")
 
-        if method == 'pyvista':
+        if method == "pyvista":
             grid = pv.StructuredGrid(
                 self.pcd[:, :, 0], self.pcd[:, :, 1], self.pcd[:, :, 2]
             )
             self.mesh = grid.cast_to_poly_points().delaunay_2d()
 
-        elif method == 'trimesh':
+        elif method == "trimesh":
             h, w, _ = self.pcd.shape
             vertices = self.pcd.reshape(-1, 3)
 
@@ -77,7 +78,6 @@ class RasterioDEM:
             self.mesh = mesh
             print("mesh.vertices.shape =", self.mesh.vertices.shape)
             print("mesh.vertices[:5] =", self.mesh.vertices[:5])
-
 
         else:
             raise ValueError(f"Unknown mesh method: {method}")
@@ -117,7 +117,3 @@ class RasterioDEM:
         inter_points[index_ray] = locations
 
         return np.stack((ray_origins, inter_points), axis=1)
-
-
-
-

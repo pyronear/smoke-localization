@@ -8,11 +8,12 @@ st.set_page_config(layout="wide")
 
 # === Configuration ===
 canvas_width = 800  # Display width
-fov_h_deg = 87      # Horizontal FOV in degrees
-fov_v_deg = 44      # Vertical FOV in degrees
+fov_h_deg = 87  # Horizontal FOV in degrees
+fov_v_deg = 44  # Vertical FOV in degrees
 
 dem_path = "dem.jpg"
 img_path = "/Users/mateo/pyronear/vision/datasets/pyro-sdis/images/val/sdis-07_brison-200_2024-02-02T12-06-40.jpg"
+
 
 # === Helpers ===
 def load_and_resize(image_path, target_width):
@@ -21,6 +22,7 @@ def load_and_resize(image_path, target_width):
     scale = target_width / w
     resized = img.resize((target_width, int(h * scale)))
     return img, resized, scale
+
 
 # === Load and resize images ===
 dem_orig, dem_resized, scale_dem = load_and_resize(dem_path, canvas_width)
@@ -40,7 +42,7 @@ with col1:
         height=dem_resized.size[1],
         width=dem_resized.size[0],
         drawing_mode="point",
-        key="canvas_dem"
+        key="canvas_dem",
     )
 
 with col2:
@@ -53,7 +55,7 @@ with col2:
         height=img_resized.size[1],
         width=img_resized.size[0],
         drawing_mode="point",
-        key="canvas_img"
+        key="canvas_img",
     )
 
 # === Store clicks ===
@@ -105,7 +107,6 @@ if st.session_state.clicks["dem"] and st.session_state.clicks["target"]:
     st.write(f"📌 **DEM Click**: ({x1:.1f}, {y1:.1f})")
     st.write(f"📌 **Target Click**: ({x2:.1f}, {y2:.1f})")
 
-
     import matplotlib.pyplot as plt
 
     st.markdown("### 🖼️ DEM Overlay on Target Image")
@@ -124,4 +125,3 @@ if st.session_state.clicks["dem"] and st.session_state.clicks["target"]:
     ax.axis("off")
 
     st.pyplot(fig)
-
