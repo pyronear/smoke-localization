@@ -5,3 +5,4 @@
 .venv
 *.tiff
 .ipynb_checkpoints
+dem_cache/
