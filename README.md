@@ -4,6 +4,8 @@ Estimate the geographic location of smoke detected in a single frame from a [Pyr
 
 Given a camera image and its mounting parameters, the tool projects the clicked pixel onto the terrain and returns GPS coordinates of the smoke origin.
 
+![Smoke Localisation App](data/app_screenshot.jpg)
+
 ## How it works
 
 ### 1. Sky detection & tilt auto-calibration
