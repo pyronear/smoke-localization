@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 import rasterio
 import requests
+from rasterio.merge import merge
+from rasterio.windows import from_bounds
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "dem_cache"
 
@@ -60,23 +62,20 @@ def load_dsm(
     lon_min = lon - margin_deg
     lon_max = lon + margin_deg
 
-    needed_tiles = set()
-    for la in range(math.floor(lat_min), math.floor(lat_max) + 1):
-        for lo in range(math.floor(lon_min), math.floor(lon_max) + 1):
-            needed_tiles.add((la, lo))
-
-    tile_paths = [download_dem_tile(la, lo, cache) for la, lo in sorted(needed_tiles)]
+    tile_paths = [
+        download_dem_tile(la, lo, cache)
+        for la in range(math.floor(lat_min), math.floor(lat_max) + 1)
+        for lo in range(math.floor(lon_min), math.floor(lon_max) + 1)
+    ]
 
     # Read & merge tiles
     datasets = [rasterio.open(p) for p in tile_paths]
     if len(datasets) == 1:
         ds = datasets[0]
-        from rasterio.windows import from_bounds
         window = from_bounds(lon_min, lat_min, lon_max, lat_max, ds.transform)
         elev = ds.read(1, window=window)
         win_transform = ds.window_transform(window)
     else:
-        from rasterio.merge import merge
         merged, merged_transform = merge(datasets)
         elev = merged[0]
         res = merged_transform.a

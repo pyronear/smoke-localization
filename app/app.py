@@ -15,7 +15,6 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 from smoke_localisation import (
     detect_sky,
     estimate_tilt,
-    find_horizon_line,
     load_dsm,
     pixel_to_ray,
     ray_ground_intersection,
@@ -133,6 +132,16 @@ def cached_detect_sky(image_bytes):
     return detect_sky(bgr)
 
 
+def base_map(location, zoom):
+    """Folium map with the camera marker."""
+    m = folium.Map(location=location, zoom_start=zoom)
+    folium.Marker(
+        [cam_lat, cam_lon], tooltip="Camera",
+        icon=folium.Icon(color="blue", icon="video", prefix="fa"),
+    ).add_to(m)
+    return m
+
+
 # ── Image: demo or upload ──────────────────────────────────────────────
 if demo_fname is not None:
     demo_path = os.path.join(SAMPLES_DIR, demo_fname)
@@ -149,31 +158,28 @@ else:
     image_bytes = uploaded.read()
 
 img_w, img_h = image.size
-aspect_w, aspect_h = img_w, img_h
 
 # ── Sky detection & tilt calibration ────────────────────────────────────
 if auto_tilt:
     sky_mask = cached_detect_sky(image_bytes)
-    tilt_deg, horizon_v_mean, horizon_v_center = estimate_tilt(
-        sky_mask, cam_hfov, aspect_ratio=(aspect_w, aspect_h)
-    )
-    cam_tilt = tilt_deg
+    try:
+        tilt_fit = estimate_tilt(sky_mask, cam_hfov, aspect_ratio=(img_w, img_h))
+    except ValueError as e:
+        st.sidebar.warning(f"{e} Falling back to manual tilt.")
+        auto_tilt = False
+    else:
+        cam_tilt, horizon_rows = tilt_fit
 
+if auto_tilt:
     # Build overlay: tint sky blue + draw horizon line
-    sky_overlay = np.array(image).copy()
-    sky_overlay[sky_mask > 0.5, 2] = np.clip(
-        sky_overlay[sky_mask > 0.5, 2].astype(np.int16) + 80, 0, 255
-    ).astype(np.uint8)
-    horizon = find_horizon_line(sky_mask)
-    valid = horizon >= 0
-    cols_valid = np.where(valid)[0]
-    rows_valid = horizon[valid]
-    if len(cols_valid) > 1:
-        coeffs = np.polyfit(cols_valid, rows_valid, deg=1)
-        for c in range(img_w):
-            r = int(coeffs[0] * c + coeffs[1])
-            if 0 <= r < img_h:
-                sky_overlay[max(0, r-1):min(img_h, r+2), c] = [255, 0, 0]
+    sky_overlay = np.array(image.convert("RGB"))
+    sky = sky_mask > 0.5
+    sky_overlay[sky, 2] = np.clip(sky_overlay[sky, 2].astype(np.int16) + 80, 0, 255).astype(np.uint8)
+    rows = horizon_rows.astype(int)
+    cols = np.arange(img_w)
+    inside = (rows >= 0) & (rows < img_h)
+    for dr in (-1, 0, 1):
+        sky_overlay[np.clip(rows[inside] + dr, 0, img_h - 1), cols[inside]] = [255, 0, 0]
     overlay_image = Image.fromarray(sky_overlay)
 else:
     cam_tilt = manual_tilt
@@ -187,7 +193,7 @@ with col_img:
     if auto_tilt:
         st.caption(
             f"Sky-calibrated tilt: **{cam_tilt:.2f}°** "
-            f"(horizon at v={horizon_v_center:.3f})"
+            f"(horizon at v={horizon_rows[img_w // 2] / img_h:.3f})"
         )
     else:
         st.caption(f"Manual tilt: **{cam_tilt:.1f}°**")
@@ -220,18 +226,13 @@ if auto_tilt:
             st.warning("Pixel is in the sky -- no ground projection possible.")
         with col_map:
             st.subheader("Map")
-            m = folium.Map(location=[cam_lat, cam_lon], zoom_start=13)
-            folium.Marker(
-                [cam_lat, cam_lon], tooltip="Camera",
-                icon=folium.Icon(color="blue", icon="video", prefix="fa"),
-            ).add_to(m)
-            st_folium(m, use_container_width=True, height=500)
+            st_folium(base_map([cam_lat, cam_lon], 13), use_container_width=True, height=500)
         st.stop()
 
 # ── Compute ray ─────────────────────────────────────────────────────────
 ray_az, ray_el = pixel_to_ray(
     u, v, cam_azimuth, cam_hfov,
-    aspect_ratio=(aspect_w, aspect_h),
+    aspect_ratio=(img_w, img_h),
     tilt_deg=cam_tilt,
 )
 
@@ -247,7 +248,6 @@ result = ray_ground_intersection(
     elev, lats, lons,
     max_distance_m=30_000,
     step_m=5,
-    verbose=False,
 )
 
 # ── Map ─────────────────────────────────────────────────────────────────
@@ -255,12 +255,7 @@ with col_map:
     st.subheader("Map")
     if result is None:
         st.warning("Ray did not hit the terrain (pixel may be above the horizon).")
-        m = folium.Map(location=[cam_lat, cam_lon], zoom_start=13)
-        folium.Marker(
-            [cam_lat, cam_lon],
-            tooltip="Camera",
-            icon=folium.Icon(color="blue", icon="video", prefix="fa"),
-        ).add_to(m)
+        m = base_map([cam_lat, cam_lon], 13)
     else:
         hit_lat, hit_lon, hit_elev, dist = result
         st.success(
@@ -271,13 +266,7 @@ with col_map:
         center_lat = (cam_lat + hit_lat) / 2
         center_lon = (cam_lon + hit_lon) / 2
         zoom = max(10, min(17, int(17 - math.log2(max(dist, 100) / 100))))
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
-
-        folium.Marker(
-            [cam_lat, cam_lon],
-            tooltip="Camera",
-            icon=folium.Icon(color="blue", icon="video", prefix="fa"),
-        ).add_to(m)
+        m = base_map([center_lat, center_lon], zoom)
 
         folium.Marker(
             [hit_lat, hit_lon],
