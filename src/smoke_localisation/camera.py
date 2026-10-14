@@ -9,6 +9,14 @@ def vfov_deg(hfov_deg: float, aspect_ratio: tuple[int, int] = (16, 9)) -> float:
     return math.degrees(2 * math.atan(math.tan(hfov / 2) * aspect_ratio[1] / aspect_ratio[0]))
 
 
+def pixel_angles(u, v, hfov_deg: float, aspect_ratio: tuple[int, int] = (16, 9)):
+    """Horizontal and vertical angle (deg) of normalised pixel (u, v) from the optical axis.
+
+    Works on scalars or numpy arrays. Positive = right / up.
+    """
+    return (u - 0.5) * hfov_deg, (0.5 - v) * vfov_deg(hfov_deg, aspect_ratio)
+
+
 def pixel_to_ray(
     u: float,
     v: float,
@@ -16,6 +24,7 @@ def pixel_to_ray(
     hfov_deg: float,
     aspect_ratio: tuple[int, int] = (16, 9),
     tilt_deg: float = 0.0,
+    roll_deg: float = 0.0,
 ) -> tuple[float, float]:
     """Convert normalised pixel (u, v) to a ray direction.
 
@@ -31,6 +40,9 @@ def pixel_to_ray(
         Sensor aspect ratio (default 16:9).
     tilt_deg : float
         Camera pitch -- positive = looking *down* from horizon.
+    roll_deg : float
+        Camera roll -- positive = the true horizon appears higher on the right
+        side of the image. Small-angle model.
 
     Returns
     -------
@@ -38,6 +50,6 @@ def pixel_to_ray(
         Azimuth (deg, clockwise from N) and elevation (deg from horizontal,
         negative = downward) of the ray.
     """
-    ray_az = azimuth_deg + (u - 0.5) * hfov_deg
-    ray_el = (0.5 - v) * vfov_deg(hfov_deg, aspect_ratio) - tilt_deg
-    return ray_az % 360, ray_el
+    x, y = pixel_angles(u, v, hfov_deg, aspect_ratio)
+    ray_el = y - tilt_deg - math.tan(math.radians(roll_deg)) * x
+    return (azimuth_deg + x) % 360, ray_el

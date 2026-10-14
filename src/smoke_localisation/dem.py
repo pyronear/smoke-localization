@@ -8,6 +8,7 @@ import rasterio
 import requests
 from rasterio.merge import merge
 from rasterio.windows import from_bounds
+from scipy.interpolate import RegularGridInterpolator
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "dem_cache"
 
@@ -42,6 +43,17 @@ def download_dem_tile(lat_int: int, lon_int: int, out_dir: str | Path) -> Path:
         for chunk in resp.iter_content(chunk_size=1 << 20):
             f.write(chunk)
     return local_path
+
+
+def dsm_interpolator(
+    elev: np.ndarray, lats: np.ndarray, lons: np.ndarray
+) -> RegularGridInterpolator:
+    """Bilinear interpolator over the DSM, queried with (lat, lon). NaN outside the grid."""
+    if lats[0] > lats[-1]:  # RegularGridInterpolator needs ascending axes
+        elev, lats = elev[::-1, :], lats[::-1]
+    return RegularGridInterpolator(
+        (lats, lons), elev, method="linear", bounds_error=False, fill_value=np.nan,
+    )
 
 
 def load_dsm(
