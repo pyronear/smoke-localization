@@ -79,6 +79,8 @@ def calibrate(
     az_grid = np.arange(azimuth_deg - half, azimuth_deg + half, 0.05)
     sky_grid = dem_skyline(cam_lat, cam_lon, cam_z, az_grid, interp)
 
+    # ponytail: small-roll linearisation of pixel_to_ray's rotation, under 0.03 deg off for |roll| < 2 deg;
+    # fit through the full rotation if cameras with large roll show up
     fits = []
     for offset in np.round(np.arange(-max_azimuth_offset_deg, max_azimuth_offset_deg + 1e-9, 0.1), 1):
         diff = e_img - np.interp(azimuth_deg + offset + x, az_grid, sky_grid)
