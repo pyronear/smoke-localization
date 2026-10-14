@@ -13,8 +13,9 @@ from streamlit_folium import st_folium
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 from smoke_localisation import (
+    calibrate,
     detect_sky,
-    estimate_tilt,
+    find_horizon_line,
     load_dsm,
     pixel_to_ray,
     ray_ground_intersection,
@@ -115,7 +116,10 @@ cam_azimuth = st.sidebar.number_input(
 cam_hfov = st.sidebar.number_input("Horizontal FOV (deg)", value=cam_defaults["fov_h"], format="%.1f")
 cam_height = st.sidebar.number_input("Height above ground (m)", value=cam_defaults["height"], format="%.1f")
 
-auto_tilt = st.sidebar.checkbox("Auto-calibrate tilt from sky detection", value=True)
+auto_tilt = st.sidebar.checkbox(
+    "Auto-calibrate from the skyline", value=True,
+    help="Fit tilt, roll and azimuth by matching the detected sky with the skyline computed from the terrain.",
+)
 
 # ── Cached helpers ─────────────────────────────────────────────────────
 
@@ -130,6 +134,20 @@ def cached_detect_sky(image_bytes):
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
     bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     return detect_sky(bgr)
+
+
+@st.cache_data(show_spinner="Calibrating against the terrain skyline...")
+def cached_calibrate(image_bytes, lat, lon, height, azimuth, hfov):
+    elev, lats, lons = cached_load_dsm(lat, lon, margin=0.3)
+    return calibrate(cached_detect_sky(image_bytes), lat, lon, height, azimuth, hfov, elev, lats, lons)
+
+
+def draw_rows(rgb, rows, color):
+    """Draw a 2 px line through one row per image column, skipping NaN or out-of-image rows."""
+    cols = np.arange(rgb.shape[1])
+    ok = np.isfinite(rows) & (rows >= 0) & (rows < rgb.shape[0] - 1)
+    for dr in (0, 1):
+        rgb[rows[ok].astype(int) + dr, cols[ok]] = color
 
 
 # ── Image: demo or upload ──────────────────────────────────────────────
@@ -149,31 +167,36 @@ else:
 
 img_w, img_h = image.size
 
-# ── Sky detection & tilt calibration ────────────────────────────────────
+# ── Sky detection & calibration ──────────────────────────────────────
 sky_mask = cached_detect_sky(image_bytes) if auto_tilt else None
-tilt_fit = None
+cal = None
 if auto_tilt:
     try:
-        tilt_fit = estimate_tilt(sky_mask, cam_hfov, aspect_ratio=(img_w, img_h))
+        cal = cached_calibrate(image_bytes, cam_lat, cam_lon, cam_height, cam_azimuth, cam_hfov)
     except ValueError as e:
         st.sidebar.warning(f"{e} Set the tilt manually below.")
 
-if tilt_fit is None:
+if cal is None:
     cam_tilt = st.sidebar.number_input("Manual tilt (deg, positive = down)", value=3.0, format="%.1f")
-    tilt_caption = f"Tilt {cam_tilt:.1f}° (manual)"
+    cam_roll, cam_az = 0.0, cam_azimuth
+    calib_caption = f"Tilt {cam_tilt:.1f}° (manual)"
     overlay_image = image
 else:
-    cam_tilt, horizon_rows = tilt_fit
-    tilt_caption = f"Tilt {cam_tilt:.2f}° (from sky detection, horizon line in red)"
-    # Light blue tint on the sky + horizon line
+    cam_tilt, cam_roll, cam_az = cal.tilt_deg, cal.roll_deg, cal.azimuth_deg
+    az_shift = (cam_az - cam_azimuth + 180) % 360 - 180
+    calib_caption = (
+        f"Tilt {cam_tilt:+.2f}°, roll {cam_roll:+.2f}°, azimuth {cam_az:.1f}° "
+        f"({az_shift:+.1f}° vs sidebar), fit residual {cal.residual_deg:.2f}°. "
+        "Red: detected skyline, green: skyline computed from the terrain."
+    )
+    # Light blue tint on the sky + detected and predicted skylines
     rgb = np.array(image.convert("RGB"), dtype=np.float32)
     sky = sky_mask > 0.5
     rgb[sky] = 0.7 * rgb[sky] + 0.3 * np.array([120, 180, 255])
-    rows = horizon_rows.round().astype(int)
-    cols = np.arange(img_w)
-    inside = (rows >= 0) & (rows < img_h - 1)
-    for dr in (0, 1):
-        rgb[rows[inside] + dr, cols[inside]] = [255, 60, 60]
+    detected = find_horizon_line(sky_mask).astype(float)
+    detected[detected < 0] = np.nan
+    draw_rows(rgb, detected + 1, [255, 60, 60])
+    draw_rows(rgb, cal.skyline_rows, [60, 220, 90])
     overlay_image = Image.fromarray(rgb.astype(np.uint8))
 
 # ── Layout ──────────────────────────────────────────────────────────────
@@ -183,7 +206,7 @@ with col_img:
     coords = streamlit_image_coordinates(
         overlay_image, use_column_width="always", cursor="crosshair", key="click"
     )
-    st.caption(tilt_caption)
+    st.caption(calib_caption)
 
 # ── Click -> ray -> terrain hit ─────────────────────────────────────────
 result = None
@@ -199,9 +222,10 @@ if coords is not None:
             st.warning("This pixel is in the sky: no ground projection possible.")
         else:
             ray_az, ray_el = pixel_to_ray(
-                u, v, cam_azimuth, cam_hfov,
+                u, v, cam_az, cam_hfov,
                 aspect_ratio=(img_w, img_h),
                 tilt_deg=cam_tilt,
+                roll_deg=cam_roll,
             )
             details.append(f"Ray azimuth {ray_az:.2f}°, elevation {ray_el:.2f}°")
             elev, lats, lons = cached_load_dsm(cam_lat, cam_lon, margin=0.3)
@@ -229,7 +253,7 @@ with col_map:
     camera = [cam_lat, cam_lon]
     fov_edges = []
     for side in (-1, 1):
-        lon, lat, _ = geod.fwd(cam_lon, cam_lat, cam_azimuth + side * cam_hfov / 2, 10_000)
+        lon, lat, _ = geod.fwd(cam_lon, cam_lat, cam_az + side * cam_hfov / 2, 10_000)
         fov_edges.append([lat, lon])
 
     m = folium.Map(location=camera, zoom_start=12)

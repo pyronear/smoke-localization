@@ -8,14 +8,16 @@ Given a camera image and its mounting parameters, the tool projects the clicked 
 
 ## How it works
 
-### 1. Sky detection & tilt auto-calibration
+### 1. Sky detection & skyline calibration
 
-Wildfire cameras are mounted on towers or hilltops, and their exact tilt (pitch) is often unknown or approximate. To solve this, we run a sky segmentation model on the uploaded image:
+Wildfire cameras are mounted on towers or hilltops, and their exact orientation is often unknown or approximate. We estimate it from the skyline:
 
 - An **ncnn** model (`skysegsmall_sim-opt-fp16`) produces a binary sky mask
-- For each column, the lowest sky pixel defines the **terrain silhouette**
-- A line is fitted to the silhouette to find the **horizon position** in the image
-- The vertical offset of the horizon from image centre, combined with the known vertical FOV, gives the **camera tilt**
+- For each column, the lowest sky pixel gives the **detected skyline**
+- From the DSM, we compute the **expected skyline**: for each azimuth, the highest terrain point seen from the camera (with Earth curvature and standard refraction)
+- The difference between both is fitted as `tilt + roll * horizontal_angle` with a robust loss, for each azimuth offset within ±5°; the best fit gives **tilt, roll and corrected azimuth**
+
+Ridges are often above the camera, so assuming the skyline is at 0° elevation would bias the tilt by several degrees.
 
 If the clicked pixel falls in the sky region, the app warns the user instead of producing a wrong projection.
 
@@ -28,9 +30,9 @@ The tool downloads [Copernicus DEM GLO-30](https://spacedata.copernicus.eu/colle
 A pinhole camera model converts the clicked pixel `(u, v)` into a 3D ray:
 
 - **Horizontal angle**: `camera_azimuth + (u - 0.5) * HFOV`
-- **Vertical angle**: `(0.5 - v) * VFOV - tilt`
+- **Vertical angle**: `(0.5 - v) * VFOV - tilt - tan(roll) * (u - 0.5) * HFOV`
 
-The ray is then marched in 5 m steps from the camera position. At each step, the ray altitude is compared against the DSM elevation (queried via bilinear interpolation). When the ray drops below the terrain surface, a bisection refinement pinpoints the intersection.
+The ray is then marched in 5 m steps from the camera position. At each step, the ray altitude is compared against the DSM elevation (queried via bilinear interpolation), lowered by Earth curvature with standard refraction. When the ray drops below the terrain surface, a bisection refinement pinpoints the intersection.
 
 ## Streamlit app
 
@@ -60,8 +62,8 @@ uv run streamlit run app/app.py
 | Azimuth | Direction the camera centre points (degrees, clockwise from north) |
 | Horizontal FOV | Horizontal field of view (degrees) |
 | Height above ground | Camera height on tower/mast (metres) |
-| Auto-calibrate tilt | Use sky detection to estimate tilt (recommended) |
-| Manual tilt | Fallback if auto-calibration is disabled (degrees, positive = down) |
+| Auto-calibrate from the skyline | Fit tilt, roll and azimuth against the DSM skyline (recommended) |
+| Manual tilt | Used when auto-calibration is off or fails (degrees, positive = down) |
 
 Aspect ratio is read automatically from the uploaded image.
 
@@ -71,7 +73,8 @@ Aspect ratio is read automatically from the uploaded image.
 smoke-localisation/
   src/smoke_localisation/
     __init__.py             Public API
-    camera.py               Pinhole camera model, pixel to ray
+    calibration.py          DSM skyline and tilt / roll / azimuth calibration
+    camera.py               Camera model, pixel to ray
     dem.py                  DSM download (Copernicus GLO-30), loading, caching
     ray.py                  Ray-terrain intersection (marching + bisection)
     sky.py                  Sky segmentation (ncnn), horizon detection, tilt estimation
@@ -101,10 +104,10 @@ Managed with [uv](https://docs.astral.sh/uv/). All installed automatically on fi
 
 ### Current limitations
 
-- Pinhole camera model (no lens distortion correction)
+- Linear pixel-to-angle camera model (no lens distortion correction); whether the lenses are closer to pinhole or fisheye is still to be measured
 - DSM resolution is 30 m -- individual small structures are not resolved
-- Sky-based tilt calibration assumes the terrain silhouette is close to the geometric horizon; in very mountainous scenes the estimated tilt may be slightly off
-- Atmospheric refraction is not modelled
+- Skyline calibration assumes the farthest ridges are visible; haze or low clouds hide them and bias the fit. Skylines beyond the loaded DSM (about 25 km) are ignored
+- Refraction uses a fixed standard coefficient (k = 0.13)
 
 ### Investigations to improve accuracy
 
@@ -114,18 +117,18 @@ Literature review (FR): [docs/calibration-geolocalisation-etat-de-l-art.pdf](doc
 
 - [ ] **Lens distortion correction** -- wide-angle cameras (FOV > 60) have significant barrel distortion. Applying a radial distortion model (Brown-Conrady or fisheye) before projecting would improve accuracy at image edges. Requires calibration coefficients per camera model, or estimation from straight lines in the image.
 - [ ] **Per-camera intrinsics from EXIF** -- extract focal length and sensor size from image EXIF metadata to compute FOV automatically instead of requiring manual input.
-- [ ] **Roll estimation** -- the current model assumes the camera is level (no roll). A tilted horizon in the sky mask could be used to estimate and correct roll angle.
+- [x] **Roll estimation** -- the current model assumes the camera is level (no roll). A tilted horizon in the sky mask could be used to estimate and correct roll angle.
 
 **Tilt calibration**
 
-- [ ] **Terrain silhouette vs geometric horizon** -- the sky boundary includes hills and trees, which sit above the true 0-elevation horizon. Investigate using the DSM itself to render the expected terrain silhouette for the given camera position/azimuth, then match it against the detected sky boundary to jointly refine tilt and azimuth.
-- [ ] **DSM-based horizon rendering** -- for a known camera position, render the expected skyline from the DSM and cross-correlate with the detected sky mask. This would give a precise tilt+azimuth fit without relying on the geometric horizon assumption.
+- [x] **Terrain silhouette vs geometric horizon** -- the sky boundary includes hills and trees, which sit above the true 0-elevation horizon. Investigate using the DSM itself to render the expected terrain silhouette for the given camera position/azimuth, then match it against the detected sky boundary to jointly refine tilt and azimuth.
+- [x] **DSM-based horizon rendering** -- for a known camera position, render the expected skyline from the DSM and cross-correlate with the detected sky mask. This would give a precise tilt+azimuth fit without relying on the geometric horizon assumption.
 - [ ] **Multi-image tilt averaging** -- use several frames (different times of day, weather) to average out noise in the sky detection and get a more robust tilt estimate.
 
 **Terrain & projection**
 
 - [ ] **Higher resolution DSM** -- investigate using IGN's RGE ALTI (1 m or 5 m resolution, France-specific) or LiDAR-derived DSMs for better precision, especially for nearby hits where 30 m resolution matters.
-- [ ] **Atmospheric refraction correction** -- for long-range projections (> 10 km), atmospheric refraction bends the ray downward. A standard refraction model (e.g. 4/3 Earth radius approximation) would improve distant hits.
+- [x] **Atmospheric refraction correction** -- for long-range projections (> 10 km), atmospheric refraction bends the ray downward. A standard refraction model (e.g. 4/3 Earth radius approximation) would improve distant hits.
 - [ ] **Confidence / uncertainty estimation** -- the ray angle depends on pixel position, tilt, and FOV. Propagating small uncertainties on these inputs would give a confidence ellipse on the ground hit instead of a single point.
 
 **Operational**

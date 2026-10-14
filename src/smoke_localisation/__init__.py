@@ -1,3 +1,4 @@
+from .calibration import calibrate
 from .camera import pixel_to_ray
 from .dem import load_dsm
 from .ray import ray_ground_intersection

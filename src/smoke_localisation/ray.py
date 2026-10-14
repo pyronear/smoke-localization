@@ -4,7 +4,16 @@ import math
 
 import numpy as np
 import pyproj
-from scipy.interpolate import RegularGridInterpolator
+
+from .dem import dsm_interpolator
+
+# Earth radius inflated for standard atmospheric refraction (k = 0.13)
+EFFECTIVE_EARTH_RADIUS_M = 6_371_000 / (1 - 0.13)
+
+
+def curvature_drop_m(distance_m):
+    """How far the terrain falls below the camera's local horizontal plane at a given distance."""
+    return np.square(distance_m) / (2 * EFFECTIVE_EARTH_RADIUS_M)
 
 
 def ray_ground_intersection(
@@ -23,13 +32,7 @@ def ray_ground_intersection(
 
     Returns (hit_lat, hit_lon, hit_elev, distance_m) or None if no hit.
     """
-    # Interpolator expects ascending lat
-    if lats[0] > lats[-1]:
-        elev, lats = elev[::-1, :], lats[::-1]
-    interp = RegularGridInterpolator(
-        (lats, lons), elev, method="linear", bounds_error=False, fill_value=np.nan,
-    )
-
+    interp = dsm_interpolator(elev, lats, lons)
     cam_z = float(interp((cam_lat, cam_lon))) + cam_height_m
     geod = pyproj.Geod(ellps="WGS84")
     el_rad = math.radians(ray_el_deg)
@@ -39,7 +42,8 @@ def ray_ground_intersection(
         """(ray height above terrain, lat, lon, terrain elevation) at distance d along the ray."""
         lon, lat, _ = geod.fwd(cam_lon, cam_lat, ray_az_deg, d * cos_el)
         terrain_z = float(interp((lat, lon)))
-        return cam_z + d * sin_el - terrain_z, lat, lon, terrain_z
+        drop = curvature_drop_m(d * cos_el)
+        return cam_z + d * sin_el - (terrain_z - drop), lat, lon, terrain_z
 
     for i in range(1, int(max_distance_m / step_m) + 1):
         if not probe(i * step_m)[0] <= 0:  # NaN (outside DSM) is not a hit
