@@ -59,9 +59,10 @@ def calibrate(
     """Estimate tilt, roll and azimuth by fitting the detected skyline to the DSM skyline.
 
     For each azimuth offset on a 0.1 deg grid, the difference between detected and
-    predicted skyline elevations is fitted as `tilt + tan(roll) * x` (x = horizontal
+    predicted skyline elevations is fitted as `tilt + sin(roll) * x` (x = horizontal
     angle) with a robust loss, so that haze or a tree only affects a few columns.
-    The offset with the lowest robust cost wins.
+    The offset with the lowest robust cost wins, unless the given azimuth fits almost
+    as well (a skyline without distinctive shape cannot pin the azimuth).
     """
     h, w = sky_mask.shape
     horizon = find_horizon_line(sky_mask, threshold)
@@ -79,7 +80,7 @@ def calibrate(
     sky_grid = dem_skyline(cam_lat, cam_lon, cam_z, az_grid, interp)
 
     fits = []
-    for offset in np.arange(-max_azimuth_offset_deg, max_azimuth_offset_deg + 1e-9, 0.1):
+    for offset in np.round(np.arange(-max_azimuth_offset_deg, max_azimuth_offset_deg + 1e-9, 0.1), 1):
         diff = e_img - np.interp(azimuth_deg + offset + x, az_grid, sky_grid)
         fit = least_squares(
             lambda p: p[0] + p[1] * x - diff,
@@ -87,7 +88,11 @@ def calibrate(
         )
         fits.append((fit.cost, offset, fit.x, fit.fun))
 
-    _, offset, (tilt, roll_slope), residuals = min(fits, key=lambda f: f[0])
+    best = min(fits, key=lambda f: f[0])
+    at_given_azimuth = min(fits, key=lambda f: abs(f[1]))
+    # ponytail: fixed 10 % margin; use a proper identifiability test (cost curvature vs noise) if it misfires
+    chosen = at_given_azimuth if at_given_azimuth[0] <= best[0] * 1.1 else best
+    _, offset, (tilt, roll_slope), residuals = chosen
     azimuth = azimuth_deg + offset
 
     # Predicted skyline row for every column, for display
@@ -97,7 +102,7 @@ def calibrate(
 
     return Calibration(
         tilt_deg=float(tilt),
-        roll_deg=float(np.degrees(np.arctan(roll_slope))),
+        roll_deg=float(np.degrees(np.arcsin(np.clip(roll_slope, -1, 1)))),
         azimuth_deg=float(azimuth % 360),
         residual_deg=float(np.median(np.abs(residuals))),
         skyline_rows=skyline_rows,

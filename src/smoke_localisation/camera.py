@@ -42,7 +42,7 @@ def pixel_to_ray(
         Camera pitch -- positive = looking *down* from horizon.
     roll_deg : float
         Camera roll -- positive = the true horizon appears higher on the right
-        side of the image. Small-angle model.
+        side of the image.
 
     Returns
     -------
@@ -51,5 +51,8 @@ def pixel_to_ray(
         negative = downward) of the ray.
     """
     x, y = pixel_angles(u, v, hfov_deg, aspect_ratio)
-    ray_el = y - tilt_deg - math.tan(math.radians(roll_deg)) * x
-    return (azimuth_deg + x) % 360, ray_el
+    # Undo the roll: rotate the image angles back to a level camera
+    roll = math.radians(roll_deg)
+    x_level = x * math.cos(roll) + y * math.sin(roll)
+    y_level = y * math.cos(roll) - x * math.sin(roll)
+    return (azimuth_deg + x_level) % 360, y_level - tilt_deg

@@ -35,3 +35,16 @@ def test_calibrate_recovers_tilt_roll_and_azimuth():
     assert abs(cal.tilt_deg - true_tilt) < 0.1
     assert abs(cal.roll_deg - true_roll) < 0.1
     assert cal.residual_deg < 0.1
+
+
+def test_flat_skyline_keeps_the_given_azimuth():
+    lats = np.linspace(45.3, 44.7, 61)
+    lons = np.linspace(4.6, 5.4, 81)
+    elev = np.zeros((61, 81))
+    sky_mask = np.zeros((360, 640), dtype=np.float32)
+    sky_mask[:170] = 1  # straight horizon: no shape to pin the azimuth
+
+    cal = calibrate(sky_mask, 45.0, 5.0, 15.0, azimuth_deg=12.0, hfov_deg=60.0,
+                    elev=elev, lats=lats, lons=lons)
+
+    assert cal.azimuth_deg == 12.0
