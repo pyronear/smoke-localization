@@ -1,11 +1,13 @@
 """Sky segmentation (ncnn) and horizon-based tilt estimation."""
 
-import math
+import functools
 from pathlib import Path
 
 import cv2
 import ncnn
 import numpy as np
+
+from .camera import vfov_deg
 
 _MODEL_DIR = Path(__file__).resolve().parent / "models" / "skyseg"
 _PARAM_PATH = _MODEL_DIR / "skysegsmall_sim-opt-fp16.param"
@@ -14,6 +16,7 @@ _BIN_PATH = _MODEL_DIR / "skysegsmall_sim-opt-fp16.bin"
 _INPUT_SIZE = 384
 
 
+@functools.cache
 def _load_net() -> ncnn.Net:
     net = ncnn.Net()
     net.load_param(str(_PARAM_PATH))
@@ -51,14 +54,9 @@ def find_horizon_line(sky_mask: np.ndarray, threshold: float = 0.5) -> np.ndarra
     Returns an array of shape (W,) with the horizon row index per column.
     Values of -1 indicate no sky found in that column.
     """
-    binary = (sky_mask > threshold).astype(np.uint8)
-    w = binary.shape[1]
-    horizon = np.full(w, -1, dtype=np.int32)
-    for col in range(w):
-        sky_rows = np.where(binary[:, col] == 1)[0]
-        if len(sky_rows) > 0:
-            horizon[col] = sky_rows.max()
-    return horizon
+    binary = sky_mask > threshold
+    last_sky_row = binary.shape[0] - 1 - np.argmax(binary[::-1], axis=0)
+    return np.where(binary.any(axis=0), last_sky_row, -1).astype(np.int32)
 
 
 def estimate_tilt(
@@ -66,13 +64,12 @@ def estimate_tilt(
     hfov_deg: float,
     aspect_ratio: tuple[int, int] = (16, 9),
     threshold: float = 0.5,
-) -> tuple[float, float, float]:
-    """Estimate camera tilt from the sky mask horizon line.
+) -> tuple[float, np.ndarray]:
+    """Estimate camera tilt from a line fitted to the sky mask horizon.
 
-    Returns (tilt_deg, horizon_v_mean, horizon_v_center) where:
+    Returns (tilt_deg, horizon_rows) where:
     - tilt_deg: estimated tilt in degrees (positive = down)
-    - horizon_v_mean: mean normalised v-position of horizon across all columns
-    - horizon_v_center: normalised v-position of horizon at the image centre column
+    - horizon_rows: fitted horizon row (float) for each image column
     """
     h, w = sky_mask.shape
     horizon = find_horizon_line(sky_mask, threshold)
@@ -81,20 +78,9 @@ def estimate_tilt(
     if valid.sum() < w * 0.1:
         raise ValueError("Too few columns with detected sky to estimate horizon.")
 
-    cols_valid = np.where(valid)[0]
-    rows_valid = horizon[valid]
-    coeffs = np.polyfit(cols_valid, rows_valid, deg=1)
-    a, b = coeffs
+    coeffs = np.polyfit(np.where(valid)[0], horizon[valid], deg=1)
+    horizon_rows = np.polyval(coeffs, np.arange(w))
 
-    center_col = w / 2
-    horizon_row_center = a * center_col + b
-    horizon_v_center = horizon_row_center / h
-
-    horizon_v_mean = rows_valid.mean() / h
-
-    vfov_deg = math.degrees(
-        2 * math.atan(math.tan(math.radians(hfov_deg) / 2) * aspect_ratio[1] / aspect_ratio[0])
-    )
-    tilt_deg = (0.5 - horizon_v_center) * vfov_deg
-
-    return tilt_deg, horizon_v_mean, horizon_v_center
+    horizon_v_center = np.polyval(coeffs, w / 2) / h
+    tilt_deg = (0.5 - horizon_v_center) * vfov_deg(hfov_deg, aspect_ratio)
+    return float(tilt_deg), horizon_rows

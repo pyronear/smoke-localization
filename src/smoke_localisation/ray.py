@@ -18,7 +18,6 @@ def ray_ground_intersection(
     lons: np.ndarray,
     max_distance_m: float = 30_000,
     step_m: float = 10,
-    verbose: bool = True,
 ) -> tuple[float, float, float, float] | None:
     """March a ray from the camera and find where it hits the DSM.
 
@@ -26,63 +25,35 @@ def ray_ground_intersection(
     """
     # Interpolator expects ascending lat
     if lats[0] > lats[-1]:
-        elev_flip = elev[::-1, :]
-        lats_flip = lats[::-1]
-    else:
-        elev_flip = elev
-        lats_flip = lats
-
+        elev, lats = elev[::-1, :], lats[::-1]
     interp = RegularGridInterpolator(
-        (lats_flip, lons), elev_flip,
-        method="linear", bounds_error=False, fill_value=np.nan,
+        (lats, lons), elev, method="linear", bounds_error=False, fill_value=np.nan,
     )
 
-    cam_ground_elev = float(interp((cam_lat, cam_lon)))
-    cam_z = cam_ground_elev + cam_height_m
-    if verbose:
-        print(f"Camera ground elevation: {cam_ground_elev:.1f} m  ->  camera Z = {cam_z:.1f} m")
-
+    cam_z = float(interp((cam_lat, cam_lon))) + cam_height_m
     geod = pyproj.Geod(ellps="WGS84")
-
     el_rad = math.radians(ray_el_deg)
-    cos_el = math.cos(el_rad)
-    sin_el = math.sin(el_rad)
+    cos_el, sin_el = math.cos(el_rad), math.sin(el_rad)
 
-    n_steps = int(max_distance_m / step_m)
+    def probe(d: float) -> tuple[float, float, float, float]:
+        """(ray height above terrain, lat, lon, terrain elevation) at distance d along the ray."""
+        lon, lat, _ = geod.fwd(cam_lon, cam_lat, ray_az_deg, d * cos_el)
+        terrain_z = float(interp((lat, lon)))
+        return cam_z + d * sin_el - terrain_z, lat, lon, terrain_z
 
-    for i in range(1, n_steps + 1):
-        d = i * step_m
-        horiz_d = d * cos_el
-        dz = d * sin_el
-
-        ray_z = cam_z + dz
-        target_lon, target_lat, _ = geod.fwd(cam_lon, cam_lat, ray_az_deg, horiz_d)
-
-        terrain_z = interp((target_lat, target_lon))
-        if terrain_z is None or np.isnan(terrain_z):
+    for i in range(1, int(max_distance_m / step_m) + 1):
+        if not probe(i * step_m)[0] <= 0:  # NaN (outside DSM) is not a hit
             continue
-
-        terrain_z = float(terrain_z)
-
-        if ray_z <= terrain_z:
-            # Refine with bisection
-            d_lo = (i - 1) * step_m
-            d_hi = d
-            for _ in range(20):
-                d_mid = (d_lo + d_hi) / 2
-                hz = d_mid * cos_el
-                rz = cam_z + d_mid * sin_el
-                tlon, tlat, _ = geod.fwd(cam_lon, cam_lat, ray_az_deg, hz)
-                tz = float(interp((tlat, tlon)))
-                if rz <= tz:
-                    d_hi = d_mid
-                else:
-                    d_lo = d_mid
-
-            d_final = (d_lo + d_hi) / 2
-            hz = d_final * cos_el
-            hit_lon, hit_lat, _ = geod.fwd(cam_lon, cam_lat, ray_az_deg, hz)
-            hit_elev = float(interp((hit_lat, hit_lon)))
-            return hit_lat, hit_lon, hit_elev, d_final
+        # Refine with bisection
+        d_lo, d_hi = (i - 1) * step_m, i * step_m
+        for _ in range(20):
+            d_mid = (d_lo + d_hi) / 2
+            if probe(d_mid)[0] <= 0:
+                d_hi = d_mid
+            else:
+                d_lo = d_mid
+        d = (d_lo + d_hi) / 2
+        _, lat, lon, terrain_z = probe(d)
+        return lat, lon, terrain_z, d
 
     return None

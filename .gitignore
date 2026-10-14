@@ -1,8 +1,4 @@
-**/.fuse_hidden*
-**/cache/*
-**/__pycache__/*
-.token
 .venv
-*.tiff
-.ipynb_checkpoints
+__pycache__/
 dem_cache/
+.DS_Store

@@ -108,6 +108,8 @@ Managed with [uv](https://docs.astral.sh/uv/). All installed automatically on fi
 
 ### Investigations to improve accuracy
 
+Literature review (FR): [docs/calibration-geolocalisation-etat-de-l-art.pdf](docs/calibration-geolocalisation-etat-de-l-art.pdf)
+
 **Camera model**
 
 - [ ] **Lens distortion correction** -- wide-angle cameras (FOV > 60) have significant barrel distortion. Applying a radial distortion model (Brown-Conrady or fisheye) before projecting would improve accuracy at image edges. Requires calibration coefficients per camera model, or estimation from straight lines in the image.
