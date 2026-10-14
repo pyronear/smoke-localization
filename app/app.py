@@ -1,13 +1,13 @@
 """Streamlit app — click on a camera image to project the pixel onto a map."""
 
 import csv
-import math
 import os
 
 import cv2
-import numpy as np
-import streamlit as st
 import folium
+import numpy as np
+import pyproj
+import streamlit as st
 from PIL import Image
 from streamlit_folium import st_folium
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -22,6 +22,10 @@ from smoke_localisation import (
 
 st.set_page_config(page_title="Smoke Localisation", layout="wide")
 st.title("Smoke Localisation")
+st.caption(
+    "Click on the base of a smoke plume to project it onto the terrain. "
+    "Camera parameters are in the sidebar."
+)
 
 # ── Load demo cameras from CSV ─────────────────────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "data")
@@ -112,10 +116,6 @@ cam_hfov = st.sidebar.number_input("Horizontal FOV (deg)", value=cam_defaults["f
 cam_height = st.sidebar.number_input("Height above ground (m)", value=cam_defaults["height"], format="%.1f")
 
 auto_tilt = st.sidebar.checkbox("Auto-calibrate tilt from sky detection", value=True)
-manual_tilt = st.sidebar.number_input(
-    "Manual tilt (deg, positive = down)", value=3.0, format="%.1f",
-    disabled=auto_tilt,
-)
 
 # ── Cached helpers ─────────────────────────────────────────────────────
 
@@ -130,16 +130,6 @@ def cached_detect_sky(image_bytes):
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
     bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     return detect_sky(bgr)
-
-
-def base_map(location, zoom):
-    """Folium map with the camera marker."""
-    m = folium.Map(location=location, zoom_start=zoom)
-    folium.Marker(
-        [cam_lat, cam_lon], tooltip="Camera",
-        icon=folium.Icon(color="blue", icon="video", prefix="fa"),
-    ).add_to(m)
-    return m
 
 
 # ── Image: demo or upload ──────────────────────────────────────────────
@@ -160,123 +150,106 @@ else:
 img_w, img_h = image.size
 
 # ── Sky detection & tilt calibration ────────────────────────────────────
+sky_mask = cached_detect_sky(image_bytes) if auto_tilt else None
+tilt_fit = None
 if auto_tilt:
-    sky_mask = cached_detect_sky(image_bytes)
     try:
         tilt_fit = estimate_tilt(sky_mask, cam_hfov, aspect_ratio=(img_w, img_h))
     except ValueError as e:
-        st.sidebar.warning(f"{e} Falling back to manual tilt.")
-        auto_tilt = False
-    else:
-        cam_tilt, horizon_rows = tilt_fit
+        st.sidebar.warning(f"{e} Set the tilt manually below.")
 
-if auto_tilt:
-    # Build overlay: tint sky blue + draw horizon line
-    sky_overlay = np.array(image.convert("RGB"))
-    sky = sky_mask > 0.5
-    sky_overlay[sky, 2] = np.clip(sky_overlay[sky, 2].astype(np.int16) + 80, 0, 255).astype(np.uint8)
-    rows = horizon_rows.astype(int)
-    cols = np.arange(img_w)
-    inside = (rows >= 0) & (rows < img_h)
-    for dr in (-1, 0, 1):
-        sky_overlay[np.clip(rows[inside] + dr, 0, img_h - 1), cols[inside]] = [255, 0, 0]
-    overlay_image = Image.fromarray(sky_overlay)
-else:
-    cam_tilt = manual_tilt
+if tilt_fit is None:
+    cam_tilt = st.sidebar.number_input("Manual tilt (deg, positive = down)", value=3.0, format="%.1f")
+    tilt_caption = f"Tilt {cam_tilt:.1f}° (manual)"
     overlay_image = image
+else:
+    cam_tilt, horizon_rows = tilt_fit
+    tilt_caption = f"Tilt {cam_tilt:.2f}° (from sky detection, horizon line in red)"
+    # Light blue tint on the sky + horizon line
+    rgb = np.array(image.convert("RGB"), dtype=np.float32)
+    sky = sky_mask > 0.5
+    rgb[sky] = 0.7 * rgb[sky] + 0.3 * np.array([120, 180, 255])
+    rows = horizon_rows.round().astype(int)
+    cols = np.arange(img_w)
+    inside = (rows >= 0) & (rows < img_h - 1)
+    for dr in (0, 1):
+        rgb[rows[inside] + dr, cols[inside]] = [255, 60, 60]
+    overlay_image = Image.fromarray(rgb.astype(np.uint8))
 
 # ── Layout ──────────────────────────────────────────────────────────────
-col_img, col_map = st.columns(2)
+col_img, col_map = st.columns(2, gap="large")
 
 with col_img:
-    st.subheader("Click on the image")
-    if auto_tilt:
-        st.caption(
-            f"Sky-calibrated tilt: **{cam_tilt:.2f}°** "
-            f"(horizon at v={horizon_rows[img_w // 2] / img_h:.3f})"
-        )
-    else:
-        st.caption(f"Manual tilt: **{cam_tilt:.1f}°**")
+    coords = streamlit_image_coordinates(
+        overlay_image, use_column_width="always", cursor="crosshair", key="click"
+    )
+    st.caption(tilt_caption)
 
-    display_width = 700
-    coords = streamlit_image_coordinates(overlay_image, width=display_width, key="click")
+# ── Click -> ray -> terrain hit ─────────────────────────────────────────
+result = None
+if coords is not None:
+    u = coords["x"] / coords["width"]
+    v = coords["y"] / coords["height"]
+    pixel_row = min(int(v * img_h), img_h - 1)
+    pixel_col = min(int(u * img_w), img_w - 1)
+    details = [f"Pixel ({pixel_col}, {pixel_row}) of {img_w}x{img_h}, normalised ({u:.4f}, {v:.4f})"]
 
-if coords is None:
-    with col_map:
-        st.info("Click on the image to project a ray.")
-    st.stop()
+    with col_img:
+        if sky_mask is not None and sky_mask[pixel_row, pixel_col] > 0.5:
+            st.warning("This pixel is in the sky: no ground projection possible.")
+        else:
+            ray_az, ray_el = pixel_to_ray(
+                u, v, cam_azimuth, cam_hfov,
+                aspect_ratio=(img_w, img_h),
+                tilt_deg=cam_tilt,
+            )
+            details.append(f"Ray azimuth {ray_az:.2f}°, elevation {ray_el:.2f}°")
+            elev, lats, lons = cached_load_dsm(cam_lat, cam_lon, margin=0.3)
+            result = ray_ground_intersection(
+                cam_lat, cam_lon, cam_height,
+                ray_az, ray_el,
+                elev, lats, lons,
+                max_distance_m=30_000,
+                step_m=5,
+            )
+            if result is None:
+                st.warning("The ray does not hit the terrain within 30 km.")
+            else:
+                hit_lat, hit_lon, hit_elev, dist = result
+                c1, c2 = st.columns(2)
+                c1.metric("Distance", f"{dist / 1000:.2f} km")
+                c2.metric("Elevation", f"{hit_elev:.0f} m")
+                st.code(f"{hit_lat:.6f}, {hit_lon:.6f}", language=None)
+        with st.expander("Details"):
+            st.markdown("  \n".join(details))
 
-# Convert display-pixel click -> normalised [0,1] coordinates
-scale = img_w / display_width
-click_x = coords["x"] * scale
-click_y = coords["y"] * scale
-u = click_x / img_w
-v = click_y / img_h
-
-with col_img:
-    st.markdown(f"**Pixel**: ({click_x:.0f}, {click_y:.0f}) / ({img_w}x{img_h})  ->  "
-                f"**normalised**: ({u:.4f}, {v:.4f})")
-
-# ── Check if pixel is in sky ────────────────────────────────────────────
-if auto_tilt:
-    pixel_row = min(int(click_y), img_h - 1)
-    pixel_col = min(int(click_x), img_w - 1)
-    if sky_mask[pixel_row, pixel_col] > 0.5:
-        with col_img:
-            st.warning("Pixel is in the sky -- no ground projection possible.")
-        with col_map:
-            st.subheader("Map")
-            st_folium(base_map([cam_lat, cam_lon], 13), use_container_width=True, height=500)
-        st.stop()
-
-# ── Compute ray ─────────────────────────────────────────────────────────
-ray_az, ray_el = pixel_to_ray(
-    u, v, cam_azimuth, cam_hfov,
-    aspect_ratio=(img_w, img_h),
-    tilt_deg=cam_tilt,
-)
-
-with col_img:
-    st.markdown(f"**Ray**: azimuth {ray_az:.2f}°, elevation {ray_el:.2f}°")
-
-# ── DSM + intersection ──────────────────────────────────────────────────
-elev, lats, lons = cached_load_dsm(cam_lat, cam_lon, margin=0.3)
-
-result = ray_ground_intersection(
-    cam_lat, cam_lon, cam_height,
-    ray_az, ray_el,
-    elev, lats, lons,
-    max_distance_m=30_000,
-    step_m=5,
-)
-
-# ── Map ─────────────────────────────────────────────────────────────────
+# ── Map: camera field of view, plus the hit once a pixel is clicked ────
 with col_map:
-    st.subheader("Map")
+    geod = pyproj.Geod(ellps="WGS84")
+    camera = [cam_lat, cam_lon]
+    fov_edges = []
+    for side in (-1, 1):
+        lon, lat, _ = geod.fwd(cam_lon, cam_lat, cam_azimuth + side * cam_hfov / 2, 10_000)
+        fov_edges.append([lat, lon])
+
+    m = folium.Map(location=camera, zoom_start=12)
+    folium.Polygon(
+        [camera, *fov_edges], color="#3388ff", weight=1, fill=True, fill_opacity=0.1,
+        tooltip="Camera field of view (10 km)",
+    ).add_to(m)
+    folium.Marker(
+        camera, tooltip="Camera", icon=folium.Icon(color="blue", icon="video", prefix="fa"),
+    ).add_to(m)
+
     if result is None:
-        st.warning("Ray did not hit the terrain (pixel may be above the horizon).")
-        m = base_map([cam_lat, cam_lon], 13)
+        m.fit_bounds([camera, *fov_edges])
     else:
-        hit_lat, hit_lon, hit_elev, dist = result
-        st.success(
-            f"**Hit**: {hit_lat:.6f}, {hit_lon:.6f}  \n"
-            f"**Elevation**: {hit_elev:.1f} m -- **Distance**: {dist:.0f} m"
-        )
-
-        center_lat = (cam_lat + hit_lat) / 2
-        center_lon = (cam_lon + hit_lon) / 2
-        zoom = max(10, min(17, int(17 - math.log2(max(dist, 100) / 100))))
-        m = base_map([center_lat, center_lon], zoom)
-
+        hit = [hit_lat, hit_lon]
+        folium.PolyLine([camera, hit], color="red", weight=2, dash_array="5").add_to(m)
         folium.Marker(
-            [hit_lat, hit_lon],
-            tooltip=f"Hit: {hit_lat:.6f}, {hit_lon:.6f} ({dist:.0f} m)",
+            hit, tooltip=f"Hit: {hit_lat:.6f}, {hit_lon:.6f} ({dist:.0f} m)",
             icon=folium.Icon(color="red", icon="fire", prefix="fa"),
         ).add_to(m)
+        m.fit_bounds([camera, hit], padding=(40, 40))
 
-        folium.PolyLine(
-            [[cam_lat, cam_lon], [hit_lat, hit_lon]],
-            color="red", weight=2, dash_array="5",
-        ).add_to(m)
-
-    st_folium(m, use_container_width=True, height=500)
+    st_folium(m, use_container_width=True, height=500, returned_objects=[])
