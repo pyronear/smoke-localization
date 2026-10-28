@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 import numpy as np
 import pyproj
+from scipy.optimize import least_squares
 
 from .camera import pixel_angles, vfov_deg
 from .dem import dsm_interpolator
@@ -17,9 +18,8 @@ class Calibration(NamedTuple):
     azimuth_deg: float  # corrected camera azimuth
     residual_deg: float  # median |detected - predicted| skyline elevation
     skyline_rows: np.ndarray  # predicted DSM skyline row (float) for each image column
-    tilt_uncertainty_deg: float = float(
-        "nan"
-    )  # conditional diagnostic radius, not a confidence level
+    # Conditional diagnostic radii, without an assigned confidence level.
+    tilt_uncertainty_deg: float = float("nan")
     azimuth_uncertainty_deg: float = float("nan")
 
 
@@ -144,33 +144,23 @@ def calibrate(
         raise ValueError("DSM does not cover the skyline search.")
     offsets = np.arange(-max_azimuth_offset_deg, max_azimuth_offset_deg + 0.05, 0.1)
     offsets = np.unique(np.r_[offsets, 0.0])
-    diff = e_img - np.interp(azimuth_deg + offsets[:, None] + x, az_grid, sky_grid)
-    tilts = np.median(diff, axis=1)
-    slopes = np.zeros_like(tilts)
-    # Batched iteratively reweighted least squares for the existing soft-L1 loss.
-    for _ in range(64):
-        residuals = tilts[:, None] + slopes[:, None] * x - diff
-        weights = 1 / np.sqrt(1 + (residuals / 0.1) ** 2)
-        sw, sx, sxx = (
-            weights.sum(axis=1),
-            (weights * x).sum(axis=1),
-            (weights * x * x).sum(axis=1),
+    fits = []
+    for offset in offsets:
+        diff = e_img - np.interp(azimuth_deg + offset + x, az_grid, sky_grid)
+        fits.append(
+            least_squares(
+                lambda p, diff=diff: p[0] + p[1] * x - diff,
+                x0=[np.median(diff), 0.0],
+                loss="soft_l1",
+                f_scale=0.1,
+            )
         )
-        sy, sxy = (weights * diff).sum(axis=1), (weights * x * diff).sum(axis=1)
-        new_slopes = (sw * sxy - sx * sy) / (sw * sxx - sx * sx)
-        new_tilts = (sy - new_slopes * sx) / sw
-        change = max(
-            np.max(np.abs(new_tilts - tilts)), np.max(np.abs(new_slopes - slopes))
-        )
-        tilts, slopes = new_tilts, new_slopes
-        if change < 1e-7:
-            break
-    residual_grid = tilts[:, None] + slopes[:, None] * x - diff
-    costs = 0.01 * (np.sqrt(1 + (residual_grid / 0.1) ** 2) - 1).sum(axis=1)
+    costs = np.array([fit.cost for fit in fits])
+    tilts, slopes = np.array([fit.x for fit in fits]).T
     best, given = int(np.argmin(costs)), int(np.argmin(np.abs(offsets)))
     chosen = given if costs[given] <= costs[best] * 1.1 else best
     offset, tilt, roll_slope = offsets[chosen], tilts[chosen], slopes[chosen]
-    residuals = residual_grid[chosen]
+    residuals = fits[chosen].fun
     residual = float(np.median(np.abs(residuals)))
     if residual > max_residual_deg or abs(roll_slope) > np.sin(np.radians(5)):
         raise ValueError("Skyline fit residual or image roll exceeds the model limits.")
