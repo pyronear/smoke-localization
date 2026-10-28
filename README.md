@@ -89,6 +89,25 @@ smoke-localisation/
   pyproject.toml            Dependencies managed by uv
 ```
 
+## Calibration checks and uncertainty
+
+`calibrate()` searches ±20° around the declared azimuth. It uses sky components
+connected to the top edge, so cloud holes can remain inside the sky and detached
+bright ground patches do not define the horizon. Uniform masks, poor horizontal
+support, median residuals above 0.5°, roll above 5°, and optima at the azimuth
+search boundary raise `ValueError`. The app then offers manual tilt.
+
+`tilt_uncertainty_deg` is a **conditional diagnostic radius**, with no assigned
+confidence level. It combines disagreement between spatial blocks, tilt spread
+among near-optimal azimuth fits, and half a native segmentation pixel. Upsampling
+the mask does not reduce this sampling term. `azimuth_uncertainty_deg` exposes
+weak azimuth constraints, including flat skylines.
+
+These diagnostics exclude errors in FOV, mounting height, terrain and absolute
+orientation. A small residual does not establish absolute accuracy. Optional
+`max_skyline_distance_m` and `refraction_coefficient` support sensitivity checks;
+the loaded DSM must cover the chosen search distance.
+
 ## Dependencies
 
 Managed with [uv](https://docs.astral.sh/uv/). All installed automatically on first run.

@@ -11,9 +11,9 @@ from .dem import dsm_interpolator
 EFFECTIVE_EARTH_RADIUS_M = 6_371_000 / (1 - 0.13)
 
 
-def curvature_drop_m(distance_m):
+def curvature_drop_m(distance_m, refraction_coefficient=0.13):
     """How far the terrain falls below the camera's local horizontal plane at a given distance."""
-    return np.square(distance_m) / (2 * EFFECTIVE_EARTH_RADIUS_M)
+    return np.square(distance_m) * (1 - refraction_coefficient) / (2 * 6_371_000)
 
 
 def ray_ground_intersection(
