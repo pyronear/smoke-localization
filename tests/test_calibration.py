@@ -4,10 +4,33 @@ import math
 
 import numpy as np
 import pytest
+from scipy.optimize import least_squares
 
+import smoke_localisation.calibration as calibration_module
 from smoke_localisation.calibration import calibrate, dem_skyline
 from smoke_localisation.camera import pixel_angles, vfov_deg
 from smoke_localisation.dem import dsm_interpolator
+
+
+def test_batched_fit_matches_soft_l1_reference_with_outliers(monkeypatch):
+    w, h, hfov = 320, 180, 60
+    x, _ = pixel_angles((np.arange(w) + 0.5) / w, 0.5, hfov, (w, h))
+    rows = np.round((0.5 - (0.5 + 0.014 * x) / vfov_deg(hfov, (w, h))) * h)
+    rows[-30:] += 8
+    mask = (np.arange(h)[:, None] < rows).astype(float)
+    monkeypatch.setattr(
+        calibration_module,
+        "dem_skyline",
+        lambda a, b, c, az, *args, **kwargs: np.zeros_like(az),
+    )
+    dsm = (np.zeros((11, 11)), np.linspace(45.1, 44.9, 11), np.linspace(4.9, 5.1, 11))
+    actual = calibrate(mask, 45, 5, 15, 0, hfov, *dsm, max_azimuth_offset_deg=0)
+    _, observed = pixel_angles((np.arange(w) + 0.5) / w, rows / h, hfov, (w, h))
+    expected = least_squares(
+        lambda p: p[0] + p[1] * x - observed, [0.5, 0.014], loss="soft_l1", f_scale=0.1
+    )
+    assert abs(actual.tilt_deg - expected.x[0]) < 1e-5
+    assert abs(math.sin(math.radians(actual.roll_deg)) - expected.x[1]) < 1e-5
 
 
 @pytest.mark.parametrize("true_az", [3.0, 12.0])
