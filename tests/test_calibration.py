@@ -5,6 +5,7 @@ import math
 import numpy as np
 import pytest
 
+import smoke_localisation.calibration as calibration_module
 from smoke_localisation.calibration import calibrate, dem_skyline
 from smoke_localisation.camera import pixel_angles, vfov_deg
 from smoke_localisation.dem import dsm_interpolator
@@ -80,4 +81,34 @@ def test_bad_skyline_fit_is_rejected(flat_dsm):
     boundary = 180 + 80 * np.sin(np.arange(640) / 30)
     mask = (np.arange(360)[:, None] < boundary).astype(float)
     with pytest.raises(ValueError, match="residual"):
+        calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)
+
+
+def test_calibrate_uses_dsm_extent_by_default_and_keeps_fixed_cutoff(monkeypatch, flat_dsm):
+    distances = []
+
+    def fake_dem_skyline(cam_lat, cam_lon, cam_z, azimuths, interp, **kwargs):
+        distances.append(kwargs["max_distance_m"])
+        return np.zeros_like(azimuths)
+
+    monkeypatch.setattr(calibration_module, "dem_skyline", fake_dem_skyline)
+    mask = np.zeros((360, 640))
+    mask[:170] = 1
+
+    calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)
+    calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm, max_skyline_distance_m=25_000)
+
+    assert distances[0] > 25_000
+    assert distances[1] == 25_000
+
+
+def test_calibrate_rejects_an_azimuth_without_dsm_coverage(monkeypatch, flat_dsm):
+    def missing_dem_skyline(cam_lat, cam_lon, cam_z, azimuths, interp, **kwargs):
+        return np.full_like(azimuths, np.nan)
+
+    monkeypatch.setattr(calibration_module, "dem_skyline", missing_dem_skyline)
+    mask = np.zeros((360, 640))
+    mask[:170] = 1
+
+    with pytest.raises(ValueError, match="DSM does not cover"):
         calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)

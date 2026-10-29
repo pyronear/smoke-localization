@@ -104,9 +104,14 @@ the mask does not reduce this sampling term. `azimuth_uncertainty_deg` exposes
 weak azimuth constraints, including flat skylines.
 
 These diagnostics exclude errors in FOV, mounting height, terrain and absolute
-orientation. A small residual does not establish absolute accuracy. Optional
-`max_skyline_distance_m` and `refraction_coefficient` support sensitivity checks;
-the loaded DSM must cover the chosen search distance.
+orientation. A small residual does not establish absolute accuracy. By default,
+the skyline search uses the loaded DSM extent. Out-of-DSM samples are ignored;
+the fit does not extrapolate a horizon beyond the DSM edge. An azimuth with no
+DSM coverage raises `ValueError`, and partial coverage cannot establish the
+horizon beyond the edge. Set `max_skyline_distance_m` for a fixed cutoff, such as
+25,000 m when reproducing the repeatability study. Pass the same
+`refraction_coefficient` to calibration and ray-terrain intersection for a
+controlled refraction comparison.
 
 ## Dependencies
 

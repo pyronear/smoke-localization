@@ -64,7 +64,7 @@ def calibrate(
     max_azimuth_offset_deg: float = 20.0,
     threshold: float = 0.5,
     max_residual_deg: float = 0.5,
-    max_skyline_distance_m: float = 25_000,
+    max_skyline_distance_m: float | None = None,
     refraction_coefficient: float = 0.13,
 ) -> Calibration:
     """Estimate tilt, roll and azimuth by fitting the detected skyline to the DSM skyline.
@@ -98,7 +98,6 @@ def calibrate(
                 max_azimuth_offset_deg,
                 threshold,
                 max_residual_deg,
-                max_skyline_distance_m,
                 refraction_coefficient,
             )
         )
@@ -109,7 +108,10 @@ def calibrate(
         or not 0 <= max_azimuth_offset_deg <= 90
         or not 0 < threshold < 1
         or max_residual_deg <= 0
-        or not 300 < max_skyline_distance_m <= 100_000
+        or (
+            max_skyline_distance_m is not None
+            and not 300 < max_skyline_distance_m <= 100_000
+        )
         or not 0 <= refraction_coefficient < 1
     ):
         raise ValueError("Invalid camera, search, threshold or residual limit.")
@@ -128,6 +130,21 @@ def calibrate(
 
     interp = dsm_interpolator(elev, lats, lons)
     cam_z = float(interp((cam_lat, cam_lon))) + cam_height_m
+    if max_skyline_distance_m is None:
+        # Let each ray use all DSM samples up to its edge; out-of-bounds samples
+        # are ignored by dem_skyline. Keep the old fixed cutoff available to studies.
+        corner_lons, corner_lats = np.meshgrid(
+            [lons[0], lons[-1]], [min(lats[0], lats[-1]), max(lats[0], lats[-1])]
+        )
+        _, _, corner_distances = pyproj.Geod(ellps="WGS84").inv(
+            np.full(4, cam_lon),
+            np.full(4, cam_lat),
+            corner_lons.ravel(),
+            corner_lats.ravel(),
+        )
+        max_skyline_distance_m = min(100_000.0, float(np.max(corner_distances)))
+        if max_skyline_distance_m <= 300:
+            raise ValueError("DSM is too small to search for a skyline.")
     half = hfov_deg / 2 + max_azimuth_offset_deg + 0.1
     az_grid = np.arange(azimuth_deg - half, azimuth_deg + half, 0.05)
     sky_grid = dem_skyline(
