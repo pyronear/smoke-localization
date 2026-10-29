@@ -7,13 +7,10 @@ import pyproj
 
 from .dem import dsm_interpolator
 
-# Earth radius inflated for standard atmospheric refraction (k = 0.13)
-EFFECTIVE_EARTH_RADIUS_M = 6_371_000 / (1 - 0.13)
 
-
-def curvature_drop_m(distance_m):
+def curvature_drop_m(distance_m, refraction_coefficient=0.13):
     """How far the terrain falls below the camera's local horizontal plane at a given distance."""
-    return np.square(distance_m) / (2 * EFFECTIVE_EARTH_RADIUS_M)
+    return np.square(distance_m) * (1 - refraction_coefficient) / (2 * 6_371_000)
 
 
 def ray_ground_intersection(
@@ -27,6 +24,7 @@ def ray_ground_intersection(
     lons: np.ndarray,
     max_distance_m: float = 30_000,
     step_m: float = 10,
+    refraction_coefficient: float = 0.13,
 ) -> tuple[float, float, float, float] | None:
     """March a ray from the camera and find where it hits the DSM.
 
@@ -42,7 +40,7 @@ def ray_ground_intersection(
         """(ray height above terrain, lat, lon, terrain elevation) at distance d along the ray."""
         lon, lat, _ = geod.fwd(cam_lon, cam_lat, ray_az_deg, d * cos_el)
         terrain_z = float(interp((lat, lon)))
-        drop = curvature_drop_m(d * cos_el)
+        drop = curvature_drop_m(d * cos_el, refraction_coefficient)
         return cam_z + d * sin_el - (terrain_z - drop), lat, lon, terrain_z
 
     for i in range(1, int(max_distance_m / step_m) + 1):

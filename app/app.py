@@ -186,7 +186,8 @@ else:
     az_shift = (cam_az - cam_azimuth + 180) % 360 - 180
     calib_caption = (
         f"Tilt {cam_tilt:+.2f}°, roll {cam_roll:+.2f}°, azimuth {cam_az:.1f}° "
-        f"({az_shift:+.1f}° vs sidebar), fit residual {cal.residual_deg:.2f}°. "
+        f"({az_shift:+.1f}° vs sidebar), fit residual {cal.residual_deg:.2f}°, "
+        f"conditional tilt uncertainty ±{cal.tilt_uncertainty_deg:.2f}°. "
         "Red: detected skyline, green: skyline computed from the terrain."
     )
     # Light blue tint on the sky + detected and predicted skylines

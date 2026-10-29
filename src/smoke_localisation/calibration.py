@@ -9,15 +9,18 @@ from scipy.optimize import least_squares
 from .camera import pixel_angles, vfov_deg
 from .dem import dsm_interpolator
 from .ray import curvature_drop_m
-from .sky import find_horizon_line
+from .sky import SKY_INPUT_SIZE, find_horizon_line
 
 
 class Calibration(NamedTuple):
-    tilt_deg: float          # positive = looking down
-    roll_deg: float          # positive = true horizon higher on the right of the image
-    azimuth_deg: float       # corrected camera azimuth
-    residual_deg: float      # median |detected - predicted| skyline elevation
+    tilt_deg: float  # positive = looking down
+    roll_deg: float  # positive = true horizon higher on the right of the image
+    azimuth_deg: float  # corrected camera azimuth
+    residual_deg: float  # median |detected - predicted| skyline elevation
     skyline_rows: np.ndarray  # predicted DSM skyline row (float) for each image column
+    # Conditional diagnostic radii, without an assigned confidence level.
+    tilt_uncertainty_deg: float = float("nan")
+    azimuth_uncertainty_deg: float = float("nan")
 
 
 def dem_skyline(
@@ -29,17 +32,22 @@ def dem_skyline(
     min_distance_m: float = 300,
     max_distance_m: float = 25_000,
     step_m: float = 30,
+    refraction_coefficient: float = 0.13,
 ) -> np.ndarray:
     """Elevation angle (deg) of the highest DSM point seen from the camera, for each azimuth.
 
     Points closer than min_distance_m are skipped so that trees around the mast
     do not hide the real skyline. Points outside the DSM are ignored.
     """
-    az, d = np.meshgrid(azimuths_deg, np.arange(min_distance_m, max_distance_m, step_m), indexing="ij")
+    az, d = np.meshgrid(
+        azimuths_deg, np.arange(min_distance_m, max_distance_m, step_m), indexing="ij"
+    )
     lon, lat, _ = pyproj.Geod(ellps="WGS84").fwd(
         np.full(az.shape, cam_lon), np.full(az.shape, cam_lat), az, d
     )
-    z = interp(np.stack([lat, lon], axis=-1)) - curvature_drop_m(d)
+    z = interp(np.stack([lat, lon], axis=-1)) - curvature_drop_m(
+        d, refraction_coefficient
+    )
     return np.degrees(np.nanmax(np.arctan2(z - cam_z, d), axis=1))
 
 
@@ -53,8 +61,11 @@ def calibrate(
     elev: np.ndarray,
     lats: np.ndarray,
     lons: np.ndarray,
-    max_azimuth_offset_deg: float = 5.0,
+    max_azimuth_offset_deg: float = 20.0,
     threshold: float = 0.5,
+    max_residual_deg: float = 0.5,
+    max_skyline_distance_m: float | None = None,
+    refraction_coefficient: float = 0.13,
 ) -> Calibration:
     """Estimate tilt, roll and azimuth by fitting the detected skyline to the DSM skyline.
 
@@ -63,38 +74,126 @@ def calibrate(
     angle) with a robust loss, so that haze or a tree only affects a few columns.
     The offset with the lowest robust cost wins, unless the given azimuth fits almost
     as well (a skyline without distinctive shape cannot pin the azimuth).
+
+    The tilt uncertainty is a conditional diagnostic radius: spatial block
+    disagreement, near-optimal azimuth fits and half a native mask pixel. It has
+    no confidence level and excludes FOV, mast height, DSM and absolute bias.
     """
+    if (
+        sky_mask.ndim != 2
+        or min(sky_mask.shape) < 4
+        or not np.isfinite(sky_mask).all()
+        or np.any((sky_mask < 0) | (sky_mask > 1))
+    ):
+        raise ValueError("Supply a finite, two-dimensional sky-probability mask.")
+    if (
+        not all(
+            np.isfinite(v)
+            for v in (
+                cam_lat,
+                cam_lon,
+                cam_height_m,
+                azimuth_deg,
+                hfov_deg,
+                max_azimuth_offset_deg,
+                threshold,
+                max_residual_deg,
+                refraction_coefficient,
+            )
+        )
+        or not -89 < cam_lat < 89
+        or not -180 <= cam_lon <= 180
+        or not 0 < cam_height_m < 1000
+        or not 1 < hfov_deg < 179
+        or not 0 <= max_azimuth_offset_deg <= 90
+        or not 0 < threshold < 1
+        or max_residual_deg <= 0
+        or (
+            max_skyline_distance_m is not None
+            and not 300 < max_skyline_distance_m <= 100_000
+        )
+        or not 0 <= refraction_coefficient < 1
+    ):
+        raise ValueError("Invalid camera, search, threshold or residual limit.")
     h, w = sky_mask.shape
     horizon = find_horizon_line(sky_mask, threshold)
-    cols = np.flatnonzero(horizon >= 0)
-    if cols.size < 0.1 * w:
-        raise ValueError("Too few columns with detected sky to calibrate.")
+    cols = np.flatnonzero((horizon >= 0) & (horizon < h - 1))
+    if cols.size < max(16, 0.1 * w) or np.ptp(cols) < 0.5 * w:
+        raise ValueError("Too few interior skyline columns across the image.")
+    # Upsampling the 384 px segmentation mask does not create new observations.
+    cols = cols[
+        np.linspace(0, cols.size - 1, min(cols.size, SKY_INPUT_SIZE), dtype=int)
+    ]
 
     # The sky/ground boundary sits below the last sky pixel
     x, e_img = pixel_angles((cols + 0.5) / w, (horizon[cols] + 1) / h, hfov_deg, (w, h))
 
     interp = dsm_interpolator(elev, lats, lons)
     cam_z = float(interp((cam_lat, cam_lon))) + cam_height_m
+    if max_skyline_distance_m is None:
+        # Let each ray use all DSM samples up to its edge; out-of-bounds samples
+        # are ignored by dem_skyline. Keep the old fixed cutoff available to studies.
+        corner_lons, corner_lats = np.meshgrid(
+            [lons[0], lons[-1]], [min(lats[0], lats[-1]), max(lats[0], lats[-1])]
+        )
+        _, _, corner_distances = pyproj.Geod(ellps="WGS84").inv(
+            np.full(4, cam_lon),
+            np.full(4, cam_lat),
+            corner_lons.ravel(),
+            corner_lats.ravel(),
+        )
+        max_skyline_distance_m = min(100_000.0, float(np.max(corner_distances)))
+        if max_skyline_distance_m <= 300:
+            raise ValueError("DSM is too small to search for a skyline.")
     half = hfov_deg / 2 + max_azimuth_offset_deg + 0.1
     az_grid = np.arange(azimuth_deg - half, azimuth_deg + half, 0.05)
-    sky_grid = dem_skyline(cam_lat, cam_lon, cam_z, az_grid, interp)
+    sky_grid = dem_skyline(
+        cam_lat,
+        cam_lon,
+        cam_z,
+        az_grid,
+        interp,
+        max_distance_m=max_skyline_distance_m,
+        refraction_coefficient=refraction_coefficient,
+    )
 
-    # ponytail: small-roll linearisation of pixel_to_ray's rotation, under 0.03 deg off for |roll| < 2 deg;
-    # fit through the full rotation if cameras with large roll show up
+    if not np.isfinite(sky_grid).all():
+        raise ValueError("DSM does not cover the skyline search.")
+    offsets = np.arange(-max_azimuth_offset_deg, max_azimuth_offset_deg + 0.05, 0.1)
+    offsets = np.unique(np.r_[offsets, 0.0])
     fits = []
-    for offset in np.round(np.arange(-max_azimuth_offset_deg, max_azimuth_offset_deg + 1e-9, 0.1), 1):
+    for offset in offsets:
         diff = e_img - np.interp(azimuth_deg + offset + x, az_grid, sky_grid)
-        fit = least_squares(
-            lambda p: p[0] + p[1] * x - diff,
-            x0=[np.median(diff), 0.0], loss="soft_l1", f_scale=0.1,
+        fits.append(
+            least_squares(
+                lambda p, diff=diff: p[0] + p[1] * x - diff,
+                x0=[np.median(diff), 0.0],
+                loss="soft_l1",
+                f_scale=0.1,
+            )
         )
-        fits.append((fit.cost, offset, fit.x, fit.fun))
-
-    best = min(fits, key=lambda f: f[0])
-    at_given_azimuth = min(fits, key=lambda f: abs(f[1]))
-    # ponytail: fixed 10 % margin; use a proper identifiability test (cost curvature vs noise) if it misfires
-    chosen = at_given_azimuth if at_given_azimuth[0] <= best[0] * 1.1 else best
-    _, offset, (tilt, roll_slope), residuals = chosen
+    costs = np.array([fit.cost for fit in fits])
+    tilts, slopes = np.array([fit.x for fit in fits]).T
+    best, given = int(np.argmin(costs)), int(np.argmin(np.abs(offsets)))
+    chosen = given if costs[given] <= costs[best] * 1.1 else best
+    offset, tilt, roll_slope = offsets[chosen], tilts[chosen], slopes[chosen]
+    residuals = fits[chosen].fun
+    residual = float(np.median(np.abs(residuals)))
+    if residual > max_residual_deg or abs(roll_slope) > np.sin(np.radians(5)):
+        raise ValueError("Skyline fit residual or image roll exceeds the model limits.")
+    if max_azimuth_offset_deg and abs(offset) >= max_azimuth_offset_deg - 0.05:
+        raise ValueError("Azimuth fit reaches the search boundary; widen the search.")
+    blocks = np.array_split(residuals, min(12, len(residuals) // 8))
+    block_offsets = np.array([np.median(block) for block in blocks])
+    spatial_spread = 1.4826 * np.median(
+        np.abs(block_offsets - np.median(block_offsets))
+    )
+    native_half_pixel = vfov_deg(hfov_deg, (w, h)) / min(h, SKY_INPUT_SIZE) / 2
+    noise = max(spatial_spread, native_half_pixel)
+    near = costs <= costs[best] + noise**2 * len(cols) / len(blocks)
+    # shortcut: conditional radius only; DSM, height, FOV and absolute bias need references.
+    tilt_uncertainty = max(noise, np.max(np.abs(tilts[near] - tilt)))
+    azimuth_uncertainty = np.max(np.abs(offsets[near] - offset))
     azimuth = azimuth_deg + offset
 
     # Predicted skyline row for every column, for display
@@ -106,6 +205,8 @@ def calibrate(
         tilt_deg=float(tilt),
         roll_deg=float(np.degrees(np.arcsin(np.clip(roll_slope, -1, 1)))),
         azimuth_deg=float(azimuth % 360),
-        residual_deg=float(np.median(np.abs(residuals))),
+        residual_deg=residual,
         skyline_rows=skyline_rows,
+        tilt_uncertainty_deg=float(tilt_uncertainty),
+        azimuth_uncertainty_deg=float(azimuth_uncertainty),
     )

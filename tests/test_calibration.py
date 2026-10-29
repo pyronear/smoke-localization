@@ -3,13 +3,16 @@
 import math
 
 import numpy as np
+import pytest
 
+import smoke_localisation.calibration as calibration_module
 from smoke_localisation.calibration import calibrate, dem_skyline
 from smoke_localisation.camera import pixel_angles, vfov_deg
 from smoke_localisation.dem import dsm_interpolator
 
 
-def test_calibrate_recovers_tilt_roll_and_azimuth():
+@pytest.mark.parametrize("true_az", [3.0, 12.0])
+def test_calibrate_recovers_tilt_roll_and_azimuth(true_az):
     lats = np.linspace(45.3, 44.7, 241)
     lons = np.linspace(4.6, 5.4, 321)
     lat_g, lon_g = np.meshgrid(lats, lons, indexing="ij")
@@ -19,7 +22,7 @@ def test_calibrate_recovers_tilt_roll_and_azimuth():
         elev += height * np.exp(-((lat_g - lat0) ** 2 + (lon_g - lon0) ** 2) / 0.012**2)
 
     w, h, hfov, cam_height = 640, 360, 60.0, 15.0
-    true_az, true_tilt, true_roll = 3.0, 1.2, 0.8
+    true_tilt, true_roll = 1.2, 0.8
 
     interp = dsm_interpolator(elev, lats, lons)
     cam_z = float(interp((45.0, 5.0))) + cam_height
@@ -35,6 +38,7 @@ def test_calibrate_recovers_tilt_roll_and_azimuth():
     assert abs(cal.tilt_deg - true_tilt) < 0.1
     assert abs(cal.roll_deg - true_roll) < 0.1
     assert cal.residual_deg < 0.1
+    assert cal.tilt_uncertainty_deg > 0
 
 
 def test_flat_skyline_keeps_the_given_azimuth():
@@ -48,3 +52,63 @@ def test_flat_skyline_keeps_the_given_azimuth():
                     elev=elev, lats=lats, lons=lons)
 
     assert cal.azimuth_deg == 12.0
+    assert cal.azimuth_uncertainty_deg >= 19.9
+    assert np.isfinite(cal.tilt_uncertainty_deg)
+
+
+@pytest.fixture
+def flat_dsm():
+    return np.zeros((61, 81)), np.linspace(45.3, 44.7, 61), np.linspace(4.6, 5.4, 81)
+
+
+@pytest.mark.parametrize("sky", [0.0, 1.0])
+def test_uniform_masks_are_rejected(sky, flat_dsm):
+    with pytest.raises(ValueError, match="interior skyline"):
+        calibrate(np.full((360, 640), sky), 45, 5, 15, 0, 60, *flat_dsm)
+
+
+def test_upsampling_does_not_shrink_uncertainty(flat_dsm):
+    mask = np.zeros((480, 640))
+    mask[:200] = 1
+    fit = calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)
+    bigger = np.repeat(np.repeat(mask, 2, axis=0), 2, axis=1)
+    upsampled = calibrate(bigger, 45, 5, 15, 0, 60, *flat_dsm)
+    assert math.isclose(fit.tilt_uncertainty_deg, upsampled.tilt_uncertainty_deg,
+                        abs_tol=1e-6)
+
+
+def test_bad_skyline_fit_is_rejected(flat_dsm):
+    boundary = 180 + 80 * np.sin(np.arange(640) / 30)
+    mask = (np.arange(360)[:, None] < boundary).astype(float)
+    with pytest.raises(ValueError, match="residual"):
+        calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)
+
+
+def test_calibrate_uses_dsm_extent_by_default_and_keeps_fixed_cutoff(monkeypatch, flat_dsm):
+    distances = []
+
+    def fake_dem_skyline(cam_lat, cam_lon, cam_z, azimuths, interp, **kwargs):
+        distances.append(kwargs["max_distance_m"])
+        return np.zeros_like(azimuths)
+
+    monkeypatch.setattr(calibration_module, "dem_skyline", fake_dem_skyline)
+    mask = np.zeros((360, 640))
+    mask[:170] = 1
+
+    calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)
+    calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm, max_skyline_distance_m=25_000)
+
+    assert distances[0] > 25_000
+    assert distances[1] == 25_000
+
+
+def test_calibrate_rejects_an_azimuth_without_dsm_coverage(monkeypatch, flat_dsm):
+    def missing_dem_skyline(cam_lat, cam_lon, cam_z, azimuths, interp, **kwargs):
+        return np.full_like(azimuths, np.nan)
+
+    monkeypatch.setattr(calibration_module, "dem_skyline", missing_dem_skyline)
+    mask = np.zeros((360, 640))
+    mask[:170] = 1
+
+    with pytest.raises(ValueError, match="DSM does not cover"):
+        calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)
