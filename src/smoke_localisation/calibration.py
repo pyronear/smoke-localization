@@ -66,6 +66,8 @@ def calibrate(
     max_residual_deg: float = 0.5,
     max_skyline_distance_m: float | None = None,
     refraction_coefficient: float = 0.13,
+    *,
+    native_mask_height: int | None = None,
 ) -> Calibration:
     """Estimate tilt, roll and azimuth by fitting the detected skyline to the DSM skyline.
 
@@ -78,6 +80,7 @@ def calibrate(
     The tilt uncertainty is a conditional diagnostic radius: spatial block
     disagreement, near-optimal azimuth fits and half a native mask pixel. It has
     no confidence level and excludes FOV, mast height, DSM and absolute bias.
+    Pass ``native_mask_height`` when upsampling a mask shorter than 384 pixels.
     """
     if (
         sky_mask.ndim != 2
@@ -116,6 +119,11 @@ def calibrate(
     ):
         raise ValueError("Invalid camera, search, threshold or residual limit.")
     h, w = sky_mask.shape
+    if native_mask_height is not None and not (
+        isinstance(native_mask_height, (int, np.integer))
+        and 1 <= native_mask_height <= h
+    ):
+        raise ValueError("Native mask height must be an integer within the mask height.")
     horizon = find_horizon_line(sky_mask, threshold)
     cols = np.flatnonzero((horizon >= 0) & (horizon < h - 1))
     if cols.size < max(16, 0.1 * w) or np.ptp(cols) < 0.5 * w:
@@ -188,7 +196,8 @@ def calibrate(
     spatial_spread = 1.4826 * np.median(
         np.abs(block_offsets - np.median(block_offsets))
     )
-    native_half_pixel = vfov_deg(hfov_deg, (w, h)) / min(h, SKY_INPUT_SIZE) / 2
+    native_rows = min(native_mask_height or h, SKY_INPUT_SIZE)
+    native_half_pixel = vfov_deg(hfov_deg, (w, h)) / native_rows / 2
     noise = max(spatial_spread, native_half_pixel)
     near = costs <= costs[best] + noise**2 * len(cols) / len(blocks)
     # shortcut: conditional radius only; DSM, height, FOV and absolute bias need references.

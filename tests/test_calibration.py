@@ -67,12 +67,15 @@ def test_uniform_masks_are_rejected(sky, flat_dsm):
         calibrate(np.full((360, 640), sky), 45, 5, 15, 0, 60, *flat_dsm)
 
 
-def test_upsampling_does_not_shrink_uncertainty(flat_dsm):
-    mask = np.zeros((480, 640))
-    mask[:200] = 1
+@pytest.mark.parametrize("height", [240, 480])
+def test_upsampling_does_not_shrink_uncertainty(flat_dsm, height):
+    mask = np.zeros((height, 640))
+    mask[: height // 2] = 1
     fit = calibrate(mask, 45, 5, 15, 0, 60, *flat_dsm)
     bigger = np.repeat(np.repeat(mask, 2, axis=0), 2, axis=1)
-    upsampled = calibrate(bigger, 45, 5, 15, 0, 60, *flat_dsm)
+    upsampled = calibrate(
+        bigger, 45, 5, 15, 0, 60, *flat_dsm, native_mask_height=height
+    )
     assert math.isclose(fit.tilt_uncertainty_deg, upsampled.tilt_uncertainty_deg,
                         abs_tol=1e-6)
 
