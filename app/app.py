@@ -32,6 +32,7 @@ st.caption(
 DATA_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "data")
 SAMPLES_DIR = os.path.join(DATA_DIR, "samples")
 CAMERAS_CSV = os.path.join(DATA_DIR, "cameras.csv")
+SKYLINE_MARGIN_DEG = 0.7
 
 
 @st.cache_data
@@ -138,7 +139,7 @@ def cached_detect_sky(image_bytes):
 
 @st.cache_data(show_spinner="Calibrating against the terrain skyline...")
 def cached_calibrate(image_bytes, lat, lon, height, azimuth, hfov):
-    elev, lats, lons = cached_load_dsm(lat, lon, margin=0.3)
+    elev, lats, lons = cached_load_dsm(lat, lon, margin=SKYLINE_MARGIN_DEG)
     return calibrate(cached_detect_sky(image_bytes), lat, lon, height, azimuth, hfov, elev, lats, lons)
 
 
@@ -186,7 +187,8 @@ else:
     az_shift = (cam_az - cam_azimuth + 180) % 360 - 180
     calib_caption = (
         f"Tilt {cam_tilt:+.2f}°, roll {cam_roll:+.2f}°, azimuth {cam_az:.1f}° "
-        f"({az_shift:+.1f}° vs sidebar), fit residual {cal.residual_deg:.2f}°. "
+        f"({az_shift:+.1f}° vs sidebar), fit residual {cal.residual_deg:.2f}°, "
+        f"conditional tilt uncertainty ±{cal.tilt_uncertainty_deg:.2f}°. "
         "Red: detected skyline, green: skyline computed from the terrain."
     )
     # Light blue tint on the sky + detected and predicted skylines
@@ -228,7 +230,8 @@ if coords is not None:
                 roll_deg=cam_roll,
             )
             details.append(f"Ray azimuth {ray_az:.2f}°, elevation {ray_el:.2f}°")
-            elev, lats, lons = cached_load_dsm(cam_lat, cam_lon, margin=0.3)
+            margin = SKYLINE_MARGIN_DEG if auto_tilt else 0.3
+            elev, lats, lons = cached_load_dsm(cam_lat, cam_lon, margin=margin)
             result = ray_ground_intersection(
                 cam_lat, cam_lon, cam_height,
                 ray_az, ray_el,

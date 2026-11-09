@@ -13,7 +13,7 @@ _MODEL_DIR = Path(__file__).resolve().parent / "models" / "skyseg"
 _PARAM_PATH = _MODEL_DIR / "skysegsmall_sim-opt-fp16.param"
 _BIN_PATH = _MODEL_DIR / "skysegsmall_sim-opt-fp16.bin"
 
-_INPUT_SIZE = 384
+SKY_INPUT_SIZE = 384
 
 
 @functools.cache
@@ -33,7 +33,12 @@ def detect_sky(image_bgr: np.ndarray) -> np.ndarray:
     h, w = image_bgr.shape[:2]
 
     mat_in = ncnn.Mat.from_pixels_resize(
-        image_bgr, ncnn.Mat.PixelType.PIXEL_BGR2RGB, w, h, _INPUT_SIZE, _INPUT_SIZE
+        image_bgr,
+        ncnn.Mat.PixelType.PIXEL_BGR2RGB,
+        w,
+        h,
+        SKY_INPUT_SIZE,
+        SKY_INPUT_SIZE,
     )
     mat_in.substract_mean_normalize([0.0, 0.0, 0.0], [1 / 255.0, 1 / 255.0, 1 / 255.0])
 
@@ -50,11 +55,14 @@ def detect_sky(image_bgr: np.ndarray) -> np.ndarray:
 def find_horizon_line(sky_mask: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     """Find the horizon row for each column of the sky mask.
 
-    For each column, the horizon is the last row (from top) where sky > threshold.
+    Keep sky components connected to the top edge, including sky around cloud holes.
+    Detached bright patches below the skyline are not sky-boundary observations.
     Returns an array of shape (W,) with the horizon row index per column.
     Values of -1 indicate no sky found in that column.
     """
-    binary = sky_mask > threshold
+    _, labels = cv2.connectedComponents((sky_mask > threshold).astype(np.uint8))
+    top_labels = np.unique(labels[0])
+    binary = np.isin(labels, top_labels[top_labels != 0])
     last_sky_row = binary.shape[0] - 1 - np.argmax(binary[::-1], axis=0)
     return np.where(binary.any(axis=0), last_sky_row, -1).astype(np.int32)
 
